@@ -24,7 +24,11 @@ void main() {
   setUp(() async {
     db = await databaseFactory.openDatabase(
       inMemoryDatabasePath,
-      options: OpenDatabaseOptions(version: 1, onCreate: AppDatabase.onCreate),
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: AppDatabase.onCreate,
+        onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+      ),
     );
     dao = AttachmentDao(db);
 
@@ -92,5 +96,21 @@ void main() {
 
     final updated = await dao.getForMessage(messageId);
     expect(updated.first.localPath, '/tmp/report.pdf');
+  });
+
+  test('deleting the parent message cascades to its attachments', () async {
+    await dao.insertAll([
+      MailAttachment(
+        messageId: messageId,
+        filename: 'report.pdf',
+        mimeType: 'application/pdf',
+        size: 2048,
+      ),
+    ]);
+    expect(await dao.getForMessage(messageId), hasLength(1));
+
+    await db.delete('messages', where: 'id = ?', whereArgs: [messageId]);
+
+    expect(await dao.getForMessage(messageId), isEmpty);
   });
 }
