@@ -169,6 +169,16 @@ class MailRepository {
     }
   }
 
+  Future<void> deleteMessage(MailFolder currentFolder, MailMessage message) async {
+    final folders = await _folderDao.getForAccount(currentFolder.accountId);
+    final trashFolder = folders.where((f) => f.type == MailFolderType.trash).firstOrNull;
+    if (trashFolder != null && trashFolder.id != currentFolder.id) {
+      await _messageDao.moveToFolder(message.id!, trashFolder.id!);
+    } else {
+      await _messageDao.deleteMessage(message.id!);
+    }
+  }
+
   Future<void> retryFailedMessage(MailAccount account, MailMessage failedMessage) async {
     final composed = ComposedMessage(
       to: failedMessage.to.split(', ').where((e) => e.isNotEmpty).toList(),

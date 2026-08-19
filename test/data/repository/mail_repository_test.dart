@@ -345,4 +345,82 @@ void main() {
     expect(outboxMessages.first.sendStatus, MailSendStatus.failed);
     expect(outboxMessages.first.subject, 'Hi');
   });
+
+  test('deleteMessage moves the message to Trash when a Trash folder exists and it isn\'t already there', () async {
+    final inboxFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final trashFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Trash', path: 'Trash', type: MailFolderType.trash),
+    );
+    final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: inboxFolderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(inboxFolderId)).first;
+
+    await repository.deleteMessage(inboxFolder, message);
+
+    final trashMessages = await messageDao.getForFolder(trashFolderId);
+    expect(trashMessages, hasLength(1));
+    expect(trashMessages.first.id, message.id);
+    final inboxMessages = await messageDao.getForFolder(inboxFolderId);
+    expect(inboxMessages, isEmpty);
+  });
+
+  test('deleteMessage permanently removes the message when no Trash folder exists', () async {
+    final inboxFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: inboxFolderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(inboxFolderId)).first;
+
+    await repository.deleteMessage(inboxFolder, message);
+
+    expect(await messageDao.getById(message.id!), isNull);
+    expect(await messageDao.getForFolder(inboxFolderId), isEmpty);
+  });
+
+  test('deleteMessage permanently removes the message when it is already in the Trash folder', () async {
+    final trashFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Trash', path: 'Trash', type: MailFolderType.trash),
+    );
+    final trashFolder = (await folderDao.getById(trashFolderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: trashFolderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(trashFolderId)).first;
+
+    await repository.deleteMessage(trashFolder, message);
+
+    expect(await messageDao.getById(message.id!), isNull);
+    expect(await messageDao.getForFolder(trashFolderId), isEmpty);
+  });
 }

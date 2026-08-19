@@ -47,6 +47,27 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     }
   }
 
+  Future<void> _confirmDelete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this message?'),
+        content: const Text('Moves it to Trash, or removes it if already there.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      final repository = await ref.read(mailRepositoryProvider.future);
+      await repository.deleteMessage(widget.folder, _resolved ?? widget.message);
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    }
+  }
+
   Future<void> _downloadAttachment(MailAttachment attachment) async {
     setState(() => _downloadingAttachmentId = attachment.id);
     try {
@@ -94,6 +115,10 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                 forwardOf: message,
               )),
             ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            onPressed: _confirmDelete,
           ),
         ],
       ),

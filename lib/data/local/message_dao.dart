@@ -105,6 +105,21 @@ class MessageDao {
     );
   }
 
+  Future<void> moveToFolder(int messageId, int newFolderId) async {
+    final rows = await _db.rawQuery(
+      'SELECT MIN(uid) as min_uid FROM messages WHERE folder_id = ?',
+      [newFolderId],
+    );
+    final minUid = rows.first['min_uid'] as int?;
+    final uid = (minUid == null || minUid >= 0) ? -1 : minUid - 1;
+    await _db.update(
+      'messages',
+      {'folder_id': newFolderId, 'uid': uid},
+      where: 'id = ?',
+      whereArgs: [messageId],
+    );
+  }
+
   Future<void> deleteMessage(int id) async {
     await _db.delete('messages', where: 'id = ?', whereArgs: [id]);
   }

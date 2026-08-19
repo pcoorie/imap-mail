@@ -146,4 +146,47 @@ void main() {
 
     expect(find.text('invoice.pdf'), findsOneWidget);
   });
+
+  testWidgets('confirming delete moves the message to Trash and pops back to the folder view', (tester) async {
+    final seed = await seedDatabase();
+    addTearDown(() => seed.db.close());
+    final folderDao = FolderDao(seed.db);
+    final trashFolderId = await folderDao.upsert(
+      MailFolder(accountId: seed.account.id!, name: 'Trash', path: 'Trash', type: MailFolderType.trash),
+    );
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        databaseProvider.overrideWith((ref) async => seed.db),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+      ],
+      child: MaterialApp(
+        home: Navigator(
+          onGenerateRoute: (settings) => MaterialPageRoute(
+            builder: (_) => MessageDetailScreen(folder: seed.folder, message: seed.message),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.byIcon(Icons.delete_outline));
+    await tester.pump();
+
+    expect(find.text('Delete this message?'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.byType(MessageDetailScreen), findsNothing);
+
+    final messageDao = MessageDao(seed.db);
+    final trashMessages = await messageDao.getForFolder(trashFolderId);
+    expect(trashMessages, hasLength(1));
+    expect(trashMessages.first.id, seed.message.id);
+    final inboxMessages = await messageDao.getForFolder(seed.folder.id!);
+    expect(inboxMessages, isEmpty);
+  });
 }

@@ -181,5 +181,26 @@ void main() {
       await messageDao.updateSendStatus(id, MailSendStatus.sent);
       expect((await messageDao.getById(id))!.sendStatus, MailSendStatus.sent);
     });
+
+    test('moveToFolder relocates the message and assigns it a fresh negative local uid', () async {
+      final trashFolderId = await folderDao.upsert(MailFolder(
+        accountId: accountId,
+        name: 'Trash',
+        path: 'Trash',
+        type: MailFolderType.trash,
+      ));
+      await messageDao.upsertHeaders([sampleMessage(7)]);
+      final message = (await messageDao.getForFolder(folderId)).first;
+
+      await messageDao.moveToFolder(message.id!, trashFolderId);
+
+      final trashMessages = await messageDao.getForFolder(trashFolderId);
+      expect(trashMessages, hasLength(1));
+      expect(trashMessages.first.id, message.id);
+      expect(trashMessages.first.uid, lessThan(0));
+
+      final inboxMessages = await messageDao.getForFolder(folderId);
+      expect(inboxMessages, isEmpty);
+    });
   });
 }
