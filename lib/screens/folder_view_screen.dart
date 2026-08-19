@@ -11,6 +11,7 @@ import '../widgets/folder_tree_expander.dart';
 import '../widgets/message_list_tile.dart';
 import '../widgets/sync_error_banner.dart';
 import 'account_form_screen.dart';
+import 'compose_screen.dart';
 import 'message_detail_screen.dart';
 
 class FolderViewScreen extends ConsumerStatefulWidget {
@@ -31,6 +32,12 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Mail')),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => ComposeScreen(accountId: widget.accountId)),
+        ),
+        child: const Icon(Icons.edit),
+      ),
       body: foldersAsync.when(
         data: (folders) {
           final defaults = <MailFolder>[

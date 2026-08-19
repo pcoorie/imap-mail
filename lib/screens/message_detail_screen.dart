@@ -10,6 +10,7 @@ import '../models/mail_message.dart';
 import '../providers/account_providers.dart';
 import '../providers/repository_providers.dart';
 import '../widgets/attachment_tile.dart';
+import 'compose_screen.dart';
 
 class MessageDetailScreen extends ConsumerStatefulWidget {
   const MessageDetailScreen({super.key, required this.folder, required this.message});
@@ -73,7 +74,29 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   Widget build(BuildContext context) {
     final message = _resolved ?? widget.message;
     return Scaffold(
-      appBar: AppBar(title: Text(message.subject)),
+      appBar: AppBar(
+        title: Text(message.subject),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.reply),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => ComposeScreen(
+                accountId: widget.folder.accountId,
+                replyTo: message,
+              )),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.forward),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => ComposeScreen(
+                accountId: widget.folder.accountId,
+                forwardOf: message,
+              )),
+            ),
+          ),
+        ],
+      ),
       body: message.isDownloaded
           ? ListView(
               padding: const EdgeInsets.all(16),

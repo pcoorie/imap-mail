@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/account_providers.dart';
 import 'account_form_screen.dart';
 import 'folder_view_screen.dart';
+import 'settings_screen.dart';
 
 class AccountListScreen extends ConsumerWidget {
   const AccountListScreen({super.key});
@@ -16,6 +17,12 @@ class AccountListScreen extends ConsumerWidget {
           icon: const Icon(Icons.add),
           onPressed: () => Navigator.of(context).push(
             MaterialPageRoute(builder: (_) => const AccountFormScreen()),
+          ),
+        ),
+        IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const SettingsScreen()),
           ),
         ),
       ]),
