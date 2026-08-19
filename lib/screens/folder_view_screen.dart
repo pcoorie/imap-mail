@@ -6,6 +6,7 @@ import '../models/mail_folder.dart';
 import '../providers/account_providers.dart';
 import '../providers/folder_providers.dart';
 import '../providers/message_providers.dart';
+import '../providers/sync_status_providers.dart';
 import '../widgets/folder_tab_bar.dart';
 import '../widgets/folder_tree_expander.dart';
 import '../widgets/message_list_tile.dart';
@@ -29,6 +30,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
   @override
   Widget build(BuildContext context) {
     final foldersAsync = ref.watch(foldersProvider(widget.accountId));
+    final syncError = ref.watch(lastSyncErrorProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Mail')),
@@ -49,6 +51,24 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
 
           return Column(
             children: [
+              // Informational-only: a sync failure once cached data already
+              // exists must not blank the screen (unlike the full-screen
+              // `error` branch below, which only fires when there is no
+              // cache at all). Dismissible so it doesn't nag forever.
+              if (syncError != null)
+                MaterialBanner(
+                  content: Text('Showing saved data — sync failed: $syncError'),
+                  actions: [
+                    TextButton(
+                      onPressed: () => ref.invalidate(foldersProvider(widget.accountId)),
+                      child: const Text('Retry'),
+                    ),
+                    TextButton(
+                      onPressed: () => ref.read(lastSyncErrorProvider.notifier).state = null,
+                      child: const Text('Dismiss'),
+                    ),
+                  ],
+                ),
               Padding(
                 padding: const EdgeInsets.all(8),
                 child: FolderTabBar(
