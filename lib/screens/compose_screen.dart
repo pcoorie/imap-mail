@@ -20,6 +20,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
 class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   late final TextEditingController _to;
   late final TextEditingController _cc = TextEditingController();
+  late final TextEditingController _bcc = TextEditingController();
   late final TextEditingController _subject;
   late final TextEditingController _body;
   final List<String> _attachmentPaths = [];
@@ -41,7 +42,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _body = TextEditingController(
       text: widget.forwardOf != null ? '\n\n---\n${widget.forwardOf!.bodyText ?? ''}' : '',
     );
-    for (final controller in [_to, _cc, _subject, _body]) {
+    for (final controller in [_to, _cc, _bcc, _subject, _body]) {
       controller.addListener(() => setState(() {}));
     }
   }
@@ -71,7 +72,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       final composed = ComposedMessage(
         to: _to.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
         cc: _cc.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
-        bcc: const [],
+        bcc: _bcc.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
         subject: _subject.text.trim(),
         bodyText: _body.text,
         bodyHtml: null,
@@ -98,6 +99,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               decoration: const InputDecoration(labelText: 'To')),
           TextField(key: const Key('ccField'), controller: _cc,
               decoration: const InputDecoration(labelText: 'Cc')),
+          TextField(key: const Key('bccField'), controller: _bcc,
+              decoration: const InputDecoration(labelText: 'Bcc')),
           TextField(key: const Key('subjectField'), controller: _subject,
               decoration: const InputDecoration(labelText: 'Subject')),
           TextField(key: const Key('bodyField'), controller: _body, maxLines: 10,
