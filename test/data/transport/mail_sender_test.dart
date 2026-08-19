@@ -16,7 +16,7 @@ void main() {
     username: 'alice@example.com',
   );
 
-  test('buildMimeMessage sets from/to/cc/subject/body', () {
+  test('buildMimeMessage sets from/to/cc/subject/body', () async {
     final composed = ComposedMessage(
       to: const ['bob@example.com'],
       cc: const ['carol@example.com'],
@@ -27,7 +27,11 @@ void main() {
       attachmentFilePaths: const [],
     );
 
-    final mime = buildMimeMessage(account, composed);
+    // buildMimeMessage is async: it's also responsible for awaiting
+    // attachment file I/O (builder.addFile), so it's the single MIME
+    // construction path EnoughMailSender.send() calls too — see
+    // lib/data/transport/mail_sender.dart.
+    final mime = await buildMimeMessage(account, composed);
 
     expect(mime.from?.first.email, 'alice@example.com');
     expect(mime.to?.map((a) => a.email), contains('bob@example.com'));
@@ -36,7 +40,7 @@ void main() {
     expect(mime.decodeTextPlainPart(), contains('Hi Bob'));
   });
 
-  test('buildMimeMessage throws when there are no recipients', () {
+  test('buildMimeMessage throws when there are no recipients', () async {
     final composed = ComposedMessage(
       to: const [],
       cc: const [],
@@ -47,6 +51,6 @@ void main() {
       attachmentFilePaths: const [],
     );
 
-    expect(() => buildMimeMessage(account, composed), throwsArgumentError);
+    await expectLater(buildMimeMessage(account, composed), throwsArgumentError);
   });
 }

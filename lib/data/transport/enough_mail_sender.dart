@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:enough_mail/enough_mail.dart' as enough;
 import '../../models/enums.dart';
 import '../../models/mail_account.dart';
@@ -28,42 +27,11 @@ class EnoughMailSender implements MailSender {
       loginName: account.username,
     );
 
-    final builder = enough.MessageBuilder()
-      ..from = [enough.MailAddress(account.displayName, account.email)]
-      ..to = message.to.map((e) => enough.MailAddress('', e)).toList()
-      ..cc = message.cc.map((e) => enough.MailAddress('', e)).toList()
-      ..bcc = message.bcc.map((e) => enough.MailAddress('', e)).toList()
-      ..subject = message.subject;
-
-    if (message.bodyHtml != null) {
-      builder.addMultipartAlternative(
-        plainText: message.bodyText,
-        htmlText: message.bodyHtml!,
-      );
-    } else {
-      builder.text = message.bodyText;
-    }
-
-    for (final path in message.attachmentFilePaths) {
-      // NOTE: deviates from the brief's `builder.addFile(File(path))`.
-      // The installed enough_mail 2.1.7 `MessageBuilder.addFile` requires a
-      // second positional `MediaType mediaType` argument (not optional as
-      // the brief implies). Use `MediaType.guessFromFileName` to infer it
-      // from the file extension, preserving the intent of attaching the
-      // file with an appropriate content type.
-      final file = File(path);
-      await builder.addFile(
-        file,
-        enough.MediaType.guessFromFileName(path),
-      );
-    }
-
-    // NOTE: deviates from the brief's `final mime = builder.buildMimeMessage();
-    // if (mime == null) throw StateError(...)`. The installed enough_mail
-    // 2.1.7 `MessageBuilder.buildMimeMessage()` returns a non-nullable
-    // `MimeMessage`, so the null check is unreachable dead code and is
-    // omitted here.
-    final mime = builder.buildMimeMessage();
+    // Delegate MIME construction (including the zero-recipients guard and
+    // attachment handling) to the shared, unit-tested buildMimeMessage, so
+    // this is not a second, divergent reimplementation of the same logic —
+    // see mail_sender.dart.
+    final mime = await buildMimeMessage(account, message);
 
     final client = enough.MailClient(enoughAccount);
     try {
