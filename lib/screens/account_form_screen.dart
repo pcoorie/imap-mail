@@ -49,6 +49,19 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    _displayName.dispose();
+    _email.dispose();
+    _imapHost.dispose();
+    _imapPort.dispose();
+    _smtpHost.dispose();
+    _smtpPort.dispose();
+    _username.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
   bool get _isValid =>
       _displayName.text.trim().isNotEmpty &&
       _email.text.trim().contains('@') &&
@@ -72,6 +85,17 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
       smtpSecurity: _smtpSecurity,
       username: _username.text.trim(),
     );
+  }
+
+  static String _securityLabel(MailSecurity security) {
+    switch (security) {
+      case MailSecurity.ssl:
+        return 'SSL/TLS';
+      case MailSecurity.startTls:
+        return 'STARTTLS';
+      case MailSecurity.none:
+        return 'None';
+    }
   }
 
   Future<void> _testConnection() async {
@@ -119,12 +143,36 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
           TextField(key: const Key('imapPortField'), controller: _imapPort,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'IMAP port')),
+          DropdownButtonFormField<MailSecurity>(
+            key: const Key('imapSecurityDropdown'),
+            initialValue: _imapSecurity,
+            decoration: const InputDecoration(labelText: 'IMAP security'),
+            items: MailSecurity.values
+                .map((security) => DropdownMenuItem(
+                      value: security,
+                      child: Text(_securityLabel(security)),
+                    ))
+                .toList(),
+            onChanged: (value) => setState(() => _imapSecurity = value!),
+          ),
           const SizedBox(height: 16),
           TextField(key: const Key('smtpHostField'), controller: _smtpHost,
               decoration: const InputDecoration(labelText: 'SMTP host')),
           TextField(key: const Key('smtpPortField'), controller: _smtpPort,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'SMTP port')),
+          DropdownButtonFormField<MailSecurity>(
+            key: const Key('smtpSecurityDropdown'),
+            initialValue: _smtpSecurity,
+            decoration: const InputDecoration(labelText: 'SMTP security'),
+            items: MailSecurity.values
+                .map((security) => DropdownMenuItem(
+                      value: security,
+                      child: Text(_securityLabel(security)),
+                    ))
+                .toList(),
+            onChanged: (value) => setState(() => _smtpSecurity = value!),
+          ),
           const SizedBox(height: 16),
           TextField(key: const Key('usernameField'), controller: _username,
               decoration: const InputDecoration(labelText: 'Username')),

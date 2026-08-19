@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/screens/account_form_screen.dart';
 
 void main() {
@@ -43,5 +44,32 @@ void main() {
       child: MaterialApp(home: AccountFormScreen()),
     ));
     expect(find.widgetWithText(OutlinedButton, 'Test connection'), findsOneWidget);
+  });
+
+  testWidgets('shows IMAP and SMTP security dropdowns defaulting to SSL/TLS', (tester) async {
+    await useTallSurface(tester);
+    await tester.pumpWidget(const ProviderScope(
+      child: MaterialApp(home: AccountFormScreen()),
+    ));
+
+    final imapDropdownFinder = find.byKey(const Key('imapSecurityDropdown'));
+    final smtpDropdownFinder = find.byKey(const Key('smtpSecurityDropdown'));
+    expect(imapDropdownFinder, findsOneWidget);
+    expect(smtpDropdownFinder, findsOneWidget);
+
+    DropdownButtonFormField<MailSecurity> imapDropdown() =>
+        tester.widget(imapDropdownFinder);
+    expect(imapDropdown().initialValue, MailSecurity.ssl);
+
+    // Open the IMAP dropdown and select STARTTLS.
+    await tester.tap(imapDropdownFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('STARTTLS').last);
+    await tester.pumpAndSettle();
+
+    expect(imapDropdown().initialValue, MailSecurity.startTls);
+    // SMTP dropdown is unaffected by the IMAP change.
+    expect((tester.widget(smtpDropdownFinder) as DropdownButtonFormField<MailSecurity>)
+        .initialValue, MailSecurity.ssl);
   });
 }
