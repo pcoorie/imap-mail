@@ -70,7 +70,9 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
       _smtpHost.text.trim().isNotEmpty &&
       int.tryParse(_smtpPort.text.trim()) != null &&
       _username.text.trim().isNotEmpty &&
-      _password.text.isNotEmpty;
+      // Password is only required when creating a new account; editing
+      // shouldn't force the user to retype it just to change e.g. the port.
+      (widget.existing != null || _password.text.isNotEmpty);
 
   MailAccount _buildAccount() {
     return MailAccount(
@@ -117,7 +119,16 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      await ref.read(accountsProvider.notifier).add(_buildAccount(), _password.text);
+      final notifier = ref.read(accountsProvider.notifier);
+      if (widget.existing == null) {
+        await notifier.add(_buildAccount(), _password.text);
+      } else {
+        await notifier.updateAccount(
+          _buildAccount(),
+          // Empty password field means "keep the existing stored password".
+          newPassword: _password.text.isEmpty ? null : _password.text,
+        );
+      }
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       setState(() => _testResult = 'Could not save: $e');

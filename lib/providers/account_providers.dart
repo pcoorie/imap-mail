@@ -16,6 +16,16 @@ class AccountsNotifier extends AsyncNotifier<List<MailAccount>> {
     await future;
   }
 
+  /// Named `updateAccount` (not `update`) because `AsyncNotifier` already
+  /// declares an `update(cb)` method for functional state updates; reusing
+  /// that name here would be an invalid override (different signature).
+  Future<void> updateAccount(MailAccount account, {String? newPassword}) async {
+    final repository = await ref.read(accountRepositoryProvider.future);
+    await repository.updateAccount(account, newPassword: newPassword);
+    ref.invalidateSelf();
+    await future;
+  }
+
   Future<void> remove(int id) async {
     final repository = await ref.read(accountRepositoryProvider.future);
     await repository.removeAccount(id);

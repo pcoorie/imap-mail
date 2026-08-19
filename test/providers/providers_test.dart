@@ -101,4 +101,52 @@ void main() {
     final after = await container.read(accountsProvider.future);
     expect(after, hasLength(1));
   });
+
+  test('accountsProvider updateAccount persists changes without creating a second row', () async {
+    final transport = MockMailTransport();
+    when(() => transport.testConnection(any(), any())).thenAnswer((_) async {});
+
+    final container = ProviderContainer(overrides: [
+      databaseProvider.overrideWith((ref) async {
+        // singleInstance: false — otherwise sqflite_common_ffi caches and
+        // reuses the same underlying ":memory:" database instance across
+        // tests that open the same path, leaking the account added by the
+        // other test in this file into this one.
+        return databaseFactory.openDatabase(
+          inMemoryDatabasePath,
+          options: OpenDatabaseOptions(
+            version: 1,
+            onCreate: AppDatabase.onCreate,
+            singleInstance: false,
+          ),
+        );
+      }),
+      mailTransportProvider.overrideWithValue(transport),
+    ]);
+    addTearDown(container.dispose);
+
+    const account = MailAccount(
+      displayName: 'Work',
+      email: 'me@example.com',
+      imapHost: 'imap.example.com',
+      imapPort: 993,
+      imapSecurity: MailSecurity.ssl,
+      smtpHost: 'smtp.example.com',
+      smtpPort: 465,
+      smtpSecurity: MailSecurity.ssl,
+      username: 'me@example.com',
+    );
+    await container.read(accountsProvider.notifier).add(account, 'app-password');
+    final created = (await container.read(accountsProvider.future)).single;
+
+    await container.read(accountsProvider.notifier).updateAccount(
+          created.copyWith(displayName: 'Personal', imapPort: 995),
+        );
+
+    final after = await container.read(accountsProvider.future);
+    expect(after, hasLength(1));
+    expect(after.single.id, created.id);
+    expect(after.single.displayName, 'Personal');
+    expect(after.single.imapPort, 995);
+  });
 }
