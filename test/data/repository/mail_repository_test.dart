@@ -27,6 +27,8 @@ class FakeCredentialStore implements SecureCredentialStore {
   Future<String?> getPassword(int accountId) async => _passwords[accountId];
   @override
   Future<void> deletePassword(int accountId) async {}
+
+  void overridePassword(int accountId, String password) => _passwords[accountId] = password;
 }
 
 void main() {
@@ -226,6 +228,56 @@ void main() {
     final sentMessages = await messageDao.getForFolder(sentFolderId);
     expect(sentMessages, hasLength(1));
     expect(sentMessages.first.sendStatus, MailSendStatus.sent);
+  });
+
+  test('sendMessage does not throw when the best-effort caching step fails after a successful send', () async {
+    // Use a dedicated database that we close before the send completes, so that the
+    // post-send folder lookup (_folderDao.getForAccount) and the sent-copy cache write
+    // both fail with a "database closed" error. The widened try/catch around the whole
+    // caching sequence must swallow this and let sendMessage return successfully.
+    final scratchDb = await databaseFactory.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(
+        version: 1,
+        onCreate: AppDatabase.onCreate,
+        onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+      ),
+    );
+    final scratchFolderDao = FolderDao(scratchDb);
+    final scratchMessageDao = MessageDao(scratchDb);
+    final scratchAttachmentDao = AttachmentDao(scratchDb);
+    final scratchAccountId = await AccountDao(scratchDb).insert(account);
+    await scratchFolderDao.upsert(
+      MailFolder(accountId: scratchAccountId, name: 'Sent', path: 'Sent', type: MailFolderType.sent),
+    );
+    final scratchCredentialStore = FakeCredentialStore()..overridePassword(scratchAccountId, 'app-password');
+    final scratchRepository = MailRepository(
+      scratchFolderDao,
+      scratchMessageDao,
+      scratchAttachmentDao,
+      transport,
+      scratchCredentialStore,
+      sender,
+    );
+    when(() => sender.send(any(), any(), any())).thenAnswer((_) async {});
+    final composed = ComposedMessage(
+      to: const ['bob@example.com'],
+      cc: const [],
+      bcc: const [],
+      subject: 'Hi',
+      bodyText: 'Hello Bob',
+      bodyHtml: null,
+      attachmentFilePaths: const [],
+    );
+
+    await scratchDb.close();
+
+    await expectLater(
+      scratchRepository.sendMessage(account.copyWith(id: scratchAccountId), composed),
+      completes,
+    );
+
+    verify(() => sender.send(any(), any(), any())).called(1);
   });
 
   test('sendMessage on failure stores a failed record in Outbox and rethrows', () async {

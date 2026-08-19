@@ -135,10 +135,10 @@ class MailRepository {
       rethrow;
     }
 
-    final folders = await _folderDao.getForAccount(account.id!);
-    final sentFolder = folders.where((f) => f.type == MailFolderType.sent).firstOrNull;
-    if (sentFolder != null) {
-      try {
+    try {
+      final folders = await _folderDao.getForAccount(account.id!);
+      final sentFolder = folders.where((f) => f.type == MailFolderType.sent).firstOrNull;
+      if (sentFolder != null) {
         await _messageDao.insertLocal(MailMessage(
           folderId: sentFolder.id!,
           uid: 0,
@@ -155,9 +155,9 @@ class MailRepository {
           isDownloaded: true,
           sendStatus: MailSendStatus.sent,
         ));
-      } catch (_) {
-        // Best-effort local cache write; the send itself already succeeded.
       }
+    } catch (_) {
+      // Best-effort local cache write; the send itself already succeeded.
     }
   }
 
