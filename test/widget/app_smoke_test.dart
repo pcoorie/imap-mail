@@ -23,7 +23,12 @@ void main() {
       ],
       child: const ImapMailApp(),
     ));
-    await tester.pumpAndSettle();
+    // The loading branch shows a CircularProgressIndicator, whose repeating
+    // animation never naturally settles, so pumpAndSettle() would hang here.
+    // Pump a bounded sequence instead to let the in-memory database future
+    // resolve and the accountsProvider settle into its data/error state.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.byType(ImapMailApp), findsOneWidget);
   });

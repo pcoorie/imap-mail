@@ -18,7 +18,7 @@ class ImapMailApp extends ConsumerWidget {
             data: (accounts) => accounts.isEmpty
                 ? const AccountFormScreen()
                 : const AccountListScreen(),
-            loading: () => const Scaffold(body: Center(child: SizedBox())),
+            loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
             error: (error, _) => Scaffold(
               body: Center(child: Text('Failed to load accounts: $error')),
             ),
