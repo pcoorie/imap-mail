@@ -106,6 +106,39 @@ void main() {
       expect(messages.firstWhere((m) => m.uid == 1).isRead, isTrue);
     });
 
+    test(
+        'upsertHeaders on an existing uid preserves a previously-downloaded body when the new header data has no body',
+        () async {
+      await messageDao.upsertHeaders([sampleMessage(1)]);
+      final id = (await messageDao.getForFolder(folderId)).first.id!;
+      await messageDao.updateBody(id, bodyText: 'full body', bodyHtml: '<p>full body</p>');
+
+      await messageDao.upsertHeaders([sampleMessage(1).copyWith(subject: 'New subject')]);
+
+      final updated = await messageDao.getById(id);
+      expect(updated!.bodyText, 'full body');
+      expect(updated.bodyHtml, '<p>full body</p>');
+      expect(updated.isDownloaded, isTrue);
+      expect(updated.subject, 'New subject');
+    });
+
+    test(
+        'upsertHeaders on an existing uid overwrites the body when the new header data is itself downloaded',
+        () async {
+      await messageDao.upsertHeaders([sampleMessage(1)]);
+
+      await messageDao.upsertHeaders([
+        sampleMessage(1).copyWith(
+          bodyText: 'fetched body',
+          isDownloaded: true,
+        ),
+      ]);
+
+      final updated = (await messageDao.getForFolder(folderId)).first;
+      expect(updated.bodyText, 'fetched body');
+      expect(updated.isDownloaded, isTrue);
+    });
+
     test('getMaxUid returns 0 when folder is empty, else the highest uid', () async {
       expect(await messageDao.getMaxUid(folderId), 0);
       await messageDao.upsertHeaders([sampleMessage(1), sampleMessage(5)]);
@@ -129,6 +162,18 @@ void main() {
       ));
       final fetched = await messageDao.getById(id);
       expect(fetched!.sendStatus, MailSendStatus.failed);
+    });
+
+    test('insertLocal called twice into the same folder produces two distinct messages without throwing',
+        () async {
+      final id1 = await messageDao.insertLocal(sampleMessage(0).copyWith(subject: 'First local'));
+      final id2 = await messageDao.insertLocal(sampleMessage(0).copyWith(subject: 'Second local'));
+
+      final messages = await messageDao.getForFolder(folderId);
+      expect(messages, hasLength(2));
+      final m1 = messages.firstWhere((m) => m.id == id1);
+      final m2 = messages.firstWhere((m) => m.id == id2);
+      expect(m1.uid, isNot(equals(m2.uid)));
     });
 
     test('updateSendStatus updates the flag', () async {

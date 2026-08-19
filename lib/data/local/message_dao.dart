@@ -8,16 +8,62 @@ class MessageDao {
   final Database _db;
 
   Future<void> upsertHeaders(List<MailMessage> messages) async {
-    final batch = _db.batch();
+    // Resolve which messages already have a cached row before building the
+    // batch, since Database.batch() cannot branch mid-batch.
+    final existingIds = <int?>[];
     for (final message in messages) {
-      final map = message.toMap()..remove('id');
-      batch.insert('messages', map, conflictAlgorithm: ConflictAlgorithm.replace);
+      final rows = await _db.query(
+        'messages',
+        columns: ['id'],
+        where: 'folder_id = ? AND uid = ?',
+        whereArgs: [message.folderId, message.uid],
+      );
+      existingIds.add(rows.isEmpty ? null : rows.first['id'] as int);
+    }
+
+    final batch = _db.batch();
+    for (var i = 0; i < messages.length; i++) {
+      final message = messages[i];
+      final existingId = existingIds[i];
+      if (existingId == null) {
+        final map = message.toMap()..remove('id');
+        batch.insert('messages', map);
+      } else {
+        final map = <String, Object?>{
+          'subject': message.subject,
+          'from_address': message.from,
+          'to_address': message.to,
+          'date': message.date.toUtc().millisecondsSinceEpoch,
+          'snippet': message.snippet,
+          'is_read': message.isRead ? 1 : 0,
+        };
+        if (message.isDownloaded) {
+          map['body_text'] = message.bodyText;
+          map['body_html'] = message.bodyHtml;
+          map['is_downloaded'] = 1;
+        }
+        batch.update(
+          'messages',
+          map,
+          where: 'id = ?',
+          whereArgs: [existingId],
+        );
+      }
     }
     await batch.commit(noResult: true);
   }
 
   Future<int> insertLocal(MailMessage message) async {
-    final map = message.toMap()..remove('id');
+    final rows = await _db.rawQuery(
+      'SELECT MIN(uid) as min_uid FROM messages WHERE folder_id = ?',
+      [message.folderId],
+    );
+    final minUid = rows.first['min_uid'] as int?;
+    final uid = (minUid == null || minUid >= 0) ? -1 : minUid - 1;
+
+    final map = message.toMap()
+      ..remove('id')
+      ..['uid'] = uid;
     return _db.insert('messages', map);
   }
 
