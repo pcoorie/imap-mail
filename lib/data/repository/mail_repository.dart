@@ -1,3 +1,5 @@
+import 'package:collection/collection.dart';
+
 import '../../models/enums.dart';
 import '../../models/mail_account.dart';
 import '../../models/mail_attachment.dart';
@@ -8,6 +10,7 @@ import '../local/folder_dao.dart';
 import '../local/message_dao.dart';
 import '../secure/credential_store.dart';
 import '../transport/mail_transport.dart';
+import '../transport/mail_sender.dart';
 
 class MailRepository {
   MailRepository(
@@ -16,6 +19,7 @@ class MailRepository {
     this._attachmentDao,
     this._transport,
     this._credentialStore,
+    this._sender,
   );
 
   final FolderDao _folderDao;
@@ -23,6 +27,7 @@ class MailRepository {
   final AttachmentDao _attachmentDao;
   final MailTransport _transport;
   final SecureCredentialStore _credentialStore;
+  final MailSender _sender;
 
   Future<String> _passwordFor(MailAccount account) async {
     final password = await _credentialStore.getPassword(account.id!);
@@ -103,5 +108,70 @@ class MailRepository {
 
   Future<void> recordAttachmentLocalPath(int attachmentId, String localPath) {
     return _attachmentDao.updateLocalPath(attachmentId, localPath);
+  }
+
+  Future<void> sendMessage(MailAccount account, ComposedMessage composed) async {
+    final password = await _passwordFor(account);
+    try {
+      await _sender.send(account, password, composed);
+    } catch (_) {
+      final outboxId = await ensureOutboxFolder(account.id!);
+      await _messageDao.insertLocal(MailMessage(
+        folderId: outboxId,
+        uid: 0,
+        subject: composed.subject,
+        from: account.email,
+        to: composed.to.join(', '),
+        date: DateTime.now().toUtc(),
+        snippet: composed.bodyText.length > 140
+            ? composed.bodyText.substring(0, 140)
+            : composed.bodyText,
+        bodyText: composed.bodyText,
+        bodyHtml: composed.bodyHtml,
+        isRead: true,
+        isDownloaded: true,
+        sendStatus: MailSendStatus.failed,
+      ));
+      rethrow;
+    }
+
+    final folders = await _folderDao.getForAccount(account.id!);
+    final sentFolder = folders.where((f) => f.type == MailFolderType.sent).firstOrNull;
+    if (sentFolder != null) {
+      try {
+        await _messageDao.insertLocal(MailMessage(
+          folderId: sentFolder.id!,
+          uid: 0,
+          subject: composed.subject,
+          from: account.email,
+          to: composed.to.join(', '),
+          date: DateTime.now().toUtc(),
+          snippet: composed.bodyText.length > 140
+              ? composed.bodyText.substring(0, 140)
+              : composed.bodyText,
+          bodyText: composed.bodyText,
+          bodyHtml: composed.bodyHtml,
+          isRead: true,
+          isDownloaded: true,
+          sendStatus: MailSendStatus.sent,
+        ));
+      } catch (_) {
+        // Best-effort local cache write; the send itself already succeeded.
+      }
+    }
+  }
+
+  Future<void> retryFailedMessage(MailAccount account, MailMessage failedMessage) async {
+    final composed = ComposedMessage(
+      to: failedMessage.to.split(', ').where((e) => e.isNotEmpty).toList(),
+      cc: const [],
+      bcc: const [],
+      subject: failedMessage.subject,
+      bodyText: failedMessage.bodyText ?? '',
+      bodyHtml: failedMessage.bodyHtml,
+      attachmentFilePaths: const [],
+    );
+    await sendMessage(account, composed);
+    await _messageDao.deleteMessage(failedMessage.id!);
   }
 }

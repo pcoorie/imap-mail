@@ -105,6 +105,10 @@ class MessageDao {
     );
   }
 
+  Future<void> deleteMessage(int id) async {
+    await _db.delete('messages', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<int> getMaxUid(int folderId) async {
     final rows = await _db.rawQuery(
       'SELECT MAX(uid) as max_uid FROM messages WHERE folder_id = ?',

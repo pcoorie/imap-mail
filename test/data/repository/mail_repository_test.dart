@@ -8,6 +8,7 @@ import 'package:imap_mail/data/local/folder_dao.dart';
 import 'package:imap_mail/data/local/message_dao.dart';
 import 'package:imap_mail/data/repository/mail_repository.dart';
 import 'package:imap_mail/data/secure/credential_store.dart';
+import 'package:imap_mail/data/transport/mail_sender.dart';
 import 'package:imap_mail/data/transport/mail_transport.dart';
 import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/models/mail_account.dart';
@@ -15,6 +16,8 @@ import 'package:imap_mail/models/mail_folder.dart';
 import 'package:imap_mail/models/mail_message.dart';
 
 class MockMailTransport extends Mock implements MailTransport {}
+
+class MockMailSender extends Mock implements MailSender {}
 
 class FakeCredentialStore implements SecureCredentialStore {
   final Map<int, String> _passwords = {1: 'app-password'};
@@ -32,6 +35,7 @@ void main() {
   late MessageDao messageDao;
   late AttachmentDao attachmentDao;
   late MockMailTransport transport;
+  late MockMailSender sender;
   late MailRepository repository;
   late int accountId;
 
@@ -62,6 +66,15 @@ void main() {
       date: DateTime.utc(2026, 1, 1),
       snippet: '',
     ));
+    registerFallbackValue(ComposedMessage(
+      to: const [],
+      cc: const [],
+      bcc: const [],
+      subject: '',
+      bodyText: '',
+      bodyHtml: null,
+      attachmentFilePaths: const [],
+    ));
   });
 
   setUp(() async {
@@ -77,7 +90,15 @@ void main() {
     messageDao = MessageDao(db);
     attachmentDao = AttachmentDao(db);
     transport = MockMailTransport();
-    repository = MailRepository(folderDao, messageDao, attachmentDao, transport, FakeCredentialStore());
+    sender = MockMailSender();
+    repository = MailRepository(
+      folderDao,
+      messageDao,
+      attachmentDao,
+      transport,
+      FakeCredentialStore(),
+      sender,
+    );
     accountId = await AccountDao(db).insert(account);
   });
 
@@ -182,5 +203,51 @@ void main() {
     expect(result.bodyText, 'fetched body');
     final refetched = await messageDao.getById(cached.id!);
     expect(refetched!.bodyText, 'fetched body');
+  });
+
+  test('sendMessage succeeds and caches a sent copy when a Sent folder exists', () async {
+    final sentFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Sent', path: 'Sent', type: MailFolderType.sent),
+    );
+    when(() => sender.send(any(), any(), any())).thenAnswer((_) async {});
+    final composed = ComposedMessage(
+      to: const ['bob@example.com'],
+      cc: const [],
+      bcc: const [],
+      subject: 'Hi',
+      bodyText: 'Hello Bob',
+      bodyHtml: null,
+      attachmentFilePaths: const [],
+    );
+
+    await repository.sendMessage(account, composed);
+
+    verify(() => sender.send(account, 'app-password', composed)).called(1);
+    final sentMessages = await messageDao.getForFolder(sentFolderId);
+    expect(sentMessages, hasLength(1));
+    expect(sentMessages.first.sendStatus, MailSendStatus.sent);
+  });
+
+  test('sendMessage on failure stores a failed record in Outbox and rethrows', () async {
+    await repository.ensureOutboxFolder(accountId);
+    when(() => sender.send(any(), any(), any())).thenThrow(Exception('smtp down'));
+    final composed = ComposedMessage(
+      to: const ['bob@example.com'],
+      cc: const [],
+      bcc: const [],
+      subject: 'Hi',
+      bodyText: 'Hello Bob',
+      bodyHtml: null,
+      attachmentFilePaths: const [],
+    );
+
+    await expectLater(repository.sendMessage(account, composed), throwsException);
+
+    final outbox = (await folderDao.getForAccount(accountId))
+        .firstWhere((f) => f.name == 'Outbox');
+    final outboxMessages = await messageDao.getForFolder(outbox.id!);
+    expect(outboxMessages, hasLength(1));
+    expect(outboxMessages.first.sendStatus, MailSendStatus.failed);
+    expect(outboxMessages.first.subject, 'Hi');
   });
 }
