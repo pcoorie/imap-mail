@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/enums.dart';
+import '../models/mail_account.dart';
 import '../models/mail_folder.dart';
+import '../providers/account_providers.dart';
 import '../providers/folder_providers.dart';
 import '../providers/message_providers.dart';
 import '../widgets/folder_tab_bar.dart';
@@ -62,11 +64,20 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
           message: error.toString(),
           onRetry: () => ref.invalidate(foldersProvider(widget.accountId)),
           onEditAccount: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const AccountFormScreen()),
+            MaterialPageRoute(builder: (_) => AccountFormScreen(existing: _findAccount())),
           ),
         ),
       ),
     );
+  }
+
+  MailAccount? _findAccount() {
+    final accounts = ref.read(accountsProvider).valueOrNull;
+    if (accounts == null) return null;
+    for (final account in accounts) {
+      if (account.id == widget.accountId) return account;
+    }
+    return null;
   }
 }
 

@@ -2,10 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:imap_mail/models/enums.dart';
+import 'package:imap_mail/models/mail_account.dart';
 import 'package:imap_mail/models/mail_folder.dart';
+import 'package:imap_mail/providers/account_providers.dart';
 import 'package:imap_mail/providers/folder_providers.dart';
 import 'package:imap_mail/providers/message_providers.dart';
 import 'package:imap_mail/screens/folder_view_screen.dart';
+
+class _FakeAccountsNotifier extends AccountsNotifier {
+  _FakeAccountsNotifier(this._accounts);
+
+  final List<MailAccount> _accounts;
+
+  @override
+  Future<List<MailAccount>> build() async => _accounts;
+}
 
 void main() {
   const accountId = 1;
@@ -56,5 +67,42 @@ void main() {
 
     expect(find.textContaining('connection refused'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Retry'), findsOneWidget);
+  });
+
+  testWidgets('Edit account opens the form pre-filled for the failed account', (tester) async {
+    const account = MailAccount(
+      id: accountId,
+      displayName: 'Work',
+      email: 'me@example.com',
+      imapHost: 'imap.example.com',
+      imapPort: 993,
+      imapSecurity: MailSecurity.ssl,
+      smtpHost: 'smtp.example.com',
+      smtpPort: 465,
+      smtpSecurity: MailSecurity.ssl,
+      username: 'me@example.com',
+    );
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        // Mirrors the real foldersProvider, which awaits accountsProvider
+        // before syncing folders (see folder_providers.dart) — so by the
+        // time the widget reaches its error state, accountsProvider is
+        // already resolved/cached, exactly as it would be in production.
+        foldersProvider.overrideWith((ref, id) async {
+          await ref.watch(accountsProvider.future);
+          throw Exception('connection refused');
+        }),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(TextButton, 'Edit account'));
+    await tester.pumpAndSettle();
+
+    expect(find.descendant(of: find.byType(AppBar), matching: find.text('Edit account')), findsOneWidget);
+    expect(find.descendant(of: find.byType(AppBar), matching: find.text('Add account')), findsNothing);
   });
 }
