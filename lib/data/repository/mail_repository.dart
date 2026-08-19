@@ -93,7 +93,15 @@ class MailRepository {
       bodyText: fetched.bodyText,
       bodyHtml: fetched.bodyHtml,
     );
+    final attachments = await _transport.fetchAttachmentList(account, password, folder, message);
+    if (attachments.isNotEmpty) {
+      await _attachmentDao.insertAll(attachments);
+    }
     return fetched;
+  }
+
+  Future<List<MailAttachment>> getAttachments(int messageId) {
+    return _attachmentDao.getForMessage(messageId);
   }
 
   Future<List<int>> downloadAttachment(

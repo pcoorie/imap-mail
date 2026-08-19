@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:enough_mail/enough_mail.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:imap_mail/data/transport/mail_message_mapper.dart';
+import 'package:imap_mail/models/mail_attachment.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   test('maps a plain-text MimeMessage to a MailMessage record', () {
@@ -36,5 +39,30 @@ void main() {
     expect(message.bodyHtml, contains('HTML body'));
     expect(message.bodyText, contains('Plain body'));
     expect(message.snippet, isNotEmpty);
+  });
+
+  test('maps attachment parts of a MimeMessage to MailAttachment records', () async {
+    final tempDir = await Directory.systemTemp.createTemp('mail_message_mapper_test');
+    addTearDown(() => tempDir.delete(recursive: true));
+    final file = File(p.join(tempDir.path, 'report.pdf'));
+    await file.writeAsBytes(List<int>.filled(1234, 0));
+
+    final builder = MessageBuilder.prepareMultipartMixedMessage()
+      ..from = [MailAddress('Alice', 'alice@example.com')]
+      ..to = [MailAddress('Bob', 'bob@example.com')]
+      ..subject = 'Files attached'
+      ..text = 'See attached.';
+    await builder.addFile(file, MediaType.fromText('application/pdf'));
+    final mime = builder.buildMimeMessage();
+
+    final attachments = mapMimeMessageAttachments(mime, messageId: 42);
+
+    expect(attachments, hasLength(1));
+    final attachment = attachments.first;
+    expect(attachment, isA<MailAttachment>());
+    expect(attachment.messageId, 42);
+    expect(attachment.filename, 'report.pdf');
+    expect(attachment.mimeType, 'application/pdf');
+    expect(attachment.size, 1234);
   });
 }

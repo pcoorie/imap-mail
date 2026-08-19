@@ -12,6 +12,7 @@ import 'package:imap_mail/data/transport/mail_sender.dart';
 import 'package:imap_mail/data/transport/mail_transport.dart';
 import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/models/mail_account.dart';
+import 'package:imap_mail/models/mail_attachment.dart';
 import 'package:imap_mail/models/mail_folder.dart';
 import 'package:imap_mail/models/mail_message.dart';
 
@@ -199,12 +200,54 @@ void main() {
     when(() => transport.fetchBody(any(), any(), any(), any())).thenAnswer(
       (_) async => cached.copyWith(bodyText: 'fetched body', isDownloaded: true),
     );
+    when(() => transport.fetchAttachmentList(any(), any(), any(), any()))
+        .thenAnswer((_) async => <MailAttachment>[]);
 
     final result = await repository.fetchBodyIfNeeded(account, folder, cached);
 
     expect(result.bodyText, 'fetched body');
     final refetched = await messageDao.getById(cached.id!);
     expect(refetched!.bodyText, 'fetched body');
+  });
+
+  test('fetchBodyIfNeeded persists attachment metadata when fetching a not-yet-downloaded message with attachments', () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: folderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final cached = (await messageDao.getForFolder(folderId)).first;
+    when(() => transport.fetchBody(any(), any(), any(), any())).thenAnswer(
+      (_) async => cached.copyWith(bodyText: 'fetched body', isDownloaded: true),
+    );
+    when(() => transport.fetchAttachmentList(any(), any(), any(), any())).thenAnswer(
+      (_) async => [
+        MailAttachment(
+          messageId: cached.id!,
+          filename: 'report.pdf',
+          mimeType: 'application/pdf',
+          size: 1234,
+        ),
+      ],
+    );
+
+    await repository.fetchBodyIfNeeded(account, folder, cached);
+
+    final attachments = await repository.getAttachments(cached.id!);
+    expect(attachments, hasLength(1));
+    expect(attachments.first.filename, 'report.pdf');
+    expect(attachments.first.mimeType, 'application/pdf');
+    expect(attachments.first.size, 1234);
   });
 
   test('sendMessage succeeds and caches a sent copy when a Sent folder exists', () async {

@@ -37,7 +37,13 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     final accounts = await ref.read(accountsProvider.future);
     final account = accounts.firstWhere((a) => a.id == widget.folder.accountId);
     final resolved = await repository.fetchBodyIfNeeded(account, widget.folder, widget.message);
-    if (mounted) setState(() => _resolved = resolved);
+    final attachments = await repository.getAttachments(widget.message.id!);
+    if (mounted) {
+      setState(() {
+        _resolved = resolved;
+        _attachments = attachments;
+      });
+    }
   }
 
   Future<void> _downloadAttachment(MailAttachment attachment) async {

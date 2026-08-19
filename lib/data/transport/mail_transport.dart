@@ -33,4 +33,11 @@ abstract class MailTransport {
     MailMessage message,
     MailAttachment attachment,
   );
+
+  Future<List<MailAttachment>> fetchAttachmentList(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+  );
 }

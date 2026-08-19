@@ -171,4 +171,26 @@ class EnoughMailTransport implements MailTransport {
       await client.disconnect();
     }
   }
+
+  @override
+  Future<List<MailAttachment>> fetchAttachmentList(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+  ) async {
+    final client = enough.MailClient(_toEnoughAccount(account, password));
+    try {
+      await client.connect();
+      await client.selectMailboxByPath(folder.path);
+      final sequence = enough.MessageSequence.fromId(message.uid, isUid: true);
+      final mimeMessages = await client.fetchMessageSequence(
+        sequence,
+        fetchPreference: enough.FetchPreference.full,
+      );
+      return mapMimeMessageAttachments(mimeMessages.first, messageId: message.id!);
+    } finally {
+      await client.disconnect();
+    }
+  }
 }
