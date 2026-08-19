@@ -20,6 +20,7 @@ void main() {
       options: OpenDatabaseOptions(
         version: 1,
         onCreate: AppDatabase.onCreate,
+        onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       ),
     );
     dao = AccountDao(db);
@@ -70,5 +71,27 @@ void main() {
     await dao.delete(id);
 
     expect(await dao.getById(id), isNull);
+  });
+
+  test('delete cascades to folders referencing the account', () async {
+    final id = await dao.insert(account);
+    final folderId = await db.insert('folders', {
+      'account_id': id,
+      'name': 'Inbox',
+      'path': 'INBOX',
+      'type': 'inbox',
+      'unread_count': 0,
+      'is_local_only': 0,
+    });
+    expect(folderId, greaterThan(0));
+
+    await dao.delete(id);
+
+    final remainingFolders = await db.query(
+      'folders',
+      where: 'account_id = ?',
+      whereArgs: [id],
+    );
+    expect(remainingFolders, isEmpty);
   });
 }

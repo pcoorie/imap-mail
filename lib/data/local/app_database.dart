@@ -66,6 +66,11 @@ class AppDatabase {
   static Future<Database> open() async {
     final dir = await getApplicationDocumentsDirectory();
     final path = p.join(dir.path, 'imap_mail.db');
-    return openDatabase(path, version: 1, onCreate: onCreate);
+    return openDatabase(
+      path,
+      version: 1,
+      onCreate: onCreate,
+      onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+    );
   }
 }
