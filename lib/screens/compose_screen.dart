@@ -5,6 +5,7 @@ import '../data/transport/mail_sender.dart';
 import '../models/mail_message.dart';
 import '../providers/account_providers.dart';
 import '../providers/compose_providers.dart';
+import '../providers/message_providers.dart';
 
 class ComposeScreen extends ConsumerStatefulWidget {
   const ComposeScreen({super.key, required this.accountId, this.replyTo, this.forwardOf});
@@ -90,6 +91,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       );
       final send = ref.read(sendMessageProvider);
       await send(account, composed);
+      // ComposeScreen has no MailFolder in scope (only an accountId), so it
+      // can't target the specific Sent/Outbox family instance the way
+      // MessageDetailScreen's delete flow can. Invalidating the whole family
+      // is the reachable, still-correct blanket fix: any folder view
+      // currently alive re-syncs next time it's read instead of showing
+      // stale contents until a manual pull-to-refresh.
+      ref.invalidate(messagesProvider);
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       setState(() => _error = 'Could not send: $e');
