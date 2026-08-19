@@ -207,6 +207,57 @@ void main() {
     expect(await messageDao.getForFolder(trashFolderId), hasLength(1));
   });
 
+  test(
+      'syncHeaders reads the persisted watermark even when the caller passes a stale MailFolder object '
+      '(matches production: callers reuse a folder snapshot across calls rather than re-reading it)',
+      () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final trashFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Trash', path: 'Trash', type: MailFolderType.trash),
+    );
+    // This is the folder snapshot a caller (e.g. messagesProvider's family
+    // key) would hold — captured once, never re-read from the DB between
+    // calls, exactly like production.
+    final staleFolder = (await folderDao.getById(folderId))!;
+
+    when(() => transport.fetchHeadersSince(any(), any(), any(), 0)).thenAnswer((_) async => [
+          MailMessage(
+            folderId: folderId,
+            uid: 5,
+            subject: 'Only message',
+            from: 'a@example.com',
+            to: 'me@example.com',
+            date: DateTime.utc(2026, 1, 1),
+            snippet: 'only',
+          ),
+        ]);
+    // First sync advances the persisted watermark to 5, but staleFolder
+    // (still lastSyncedUid: 0) is never updated to reflect that.
+    await repository.syncHeaders(account, staleFolder);
+
+    final message = (await messageDao.getForFolder(folderId)).first;
+    await repository.deleteMessage(staleFolder, message);
+    expect(await messageDao.getForFolder(folderId), isEmpty);
+
+    when(() => transport.fetchHeadersSince(any(), any(), any(), 5)).thenAnswer((_) async => []);
+
+    // Second sync passes the SAME staleFolder object (lastSyncedUid: 0 in
+    // memory) — if syncHeaders trusted that argument instead of re-reading
+    // the DB, this second call would ALSO fetch from sinceUid: 0 (a second
+    // call with 0, on top of the first sync's legitimate one) and resurrect
+    // the message. Re-reading the DB means the second call uses 5 instead.
+    await repository.syncHeaders(account, staleFolder);
+
+    // sinceUid: 0 called exactly once — only by the first sync above, not
+    // repeated by the second call trusting the stale in-memory value.
+    verify(() => transport.fetchHeadersSince(any(), any(), any(), 0)).called(1);
+    verify(() => transport.fetchHeadersSince(any(), any(), any(), 5)).called(1);
+    expect(await messageDao.getForFolder(folderId), isEmpty);
+    expect(await messageDao.getForFolder(trashFolderId), hasLength(1));
+  });
+
   test('fetchBodyIfNeeded returns cached message untouched when already downloaded', () async {
     final folderId = await folderDao.upsert(
       MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),

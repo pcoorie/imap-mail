@@ -70,7 +70,14 @@ class MailRepository {
     // currently present in the folder: deleting/moving the newest message
     // out of the folder must never lower the sync watermark, or the next
     // sync will re-fetch and re-insert it (duplicating it wherever it moved).
-    final sinceUid = folder.lastSyncedUid;
+    //
+    // Re-read the folder row from the DB rather than trusting the `folder`
+    // argument: callers (e.g. messagesProvider) pass a MailFolder snapshotted
+    // whenever foldersProvider last ran, which can be stale by the time this
+    // method runs again later in the same session — the watermark this method
+    // itself just wrote on a prior call would otherwise never be seen.
+    final current = await _folderDao.getById(folder.id!);
+    final sinceUid = current?.lastSyncedUid ?? folder.lastSyncedUid;
     final newHeaders = await _transport.fetchHeadersSince(account, password, folder, sinceUid);
     if (newHeaders.isNotEmpty) {
       await _messageDao.upsertHeaders(newHeaders);
