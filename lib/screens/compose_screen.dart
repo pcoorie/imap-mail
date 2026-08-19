@@ -47,6 +47,16 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    _to.dispose();
+    _cc.dispose();
+    _bcc.dispose();
+    _subject.dispose();
+    _body.dispose();
+    super.dispose();
+  }
+
   bool get _isValid => _to.text.trim().isNotEmpty && _body.text.trim().isNotEmpty;
 
   Future<void> _pickAttachment() async {
