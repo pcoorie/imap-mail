@@ -182,6 +182,16 @@ void main() {
       expect((await messageDao.getById(id))!.sendStatus, MailSendStatus.sent);
     });
 
+    test('updateReadStatus marks a message read', () async {
+      await messageDao.upsertHeaders([sampleMessage(1)]);
+      final id = (await messageDao.getForFolder(folderId)).first.id!;
+      expect((await messageDao.getById(id))!.isRead, isFalse);
+
+      await messageDao.updateReadStatus(id, true);
+
+      expect((await messageDao.getById(id))!.isRead, isTrue);
+    });
+
     test('moveToFolder relocates the message and assigns it a fresh negative local uid', () async {
       final trashFolderId = await folderDao.upsert(MailFolder(
         accountId: accountId,

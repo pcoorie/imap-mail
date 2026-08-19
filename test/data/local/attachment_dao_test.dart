@@ -98,6 +98,32 @@ void main() {
     expect(updated.first.localPath, '/tmp/report.pdf');
   });
 
+  test('insertAll with a duplicate (message_id, filename) replaces rather than duplicates', () async {
+    await dao.insertAll([
+      MailAttachment(
+        messageId: messageId,
+        filename: 'report.pdf',
+        mimeType: 'application/pdf',
+        size: 2048,
+      ),
+    ]);
+
+    // Simulates re-opening a message: fetchBodyIfNeeded re-inserts the same
+    // attachment metadata a second time.
+    await dao.insertAll([
+      MailAttachment(
+        messageId: messageId,
+        filename: 'report.pdf',
+        mimeType: 'application/pdf',
+        size: 4096,
+      ),
+    ]);
+
+    final attachments = await dao.getForMessage(messageId);
+    expect(attachments, hasLength(1));
+    expect(attachments.first.size, 4096);
+  });
+
   test('deleting the parent message cascades to its attachments', () async {
     await dao.insertAll([
       MailAttachment(

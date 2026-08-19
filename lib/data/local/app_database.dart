@@ -28,6 +28,7 @@ class AppDatabase {
         type TEXT NOT NULL,
         unread_count INTEGER NOT NULL DEFAULT 0,
         is_local_only INTEGER NOT NULL DEFAULT 0,
+        last_synced_uid INTEGER NOT NULL DEFAULT 0,
         UNIQUE(account_id, path)
       )
     ''');
@@ -58,7 +59,8 @@ class AppDatabase {
         filename TEXT NOT NULL,
         mime_type TEXT NOT NULL,
         size INTEGER NOT NULL,
-        local_path TEXT
+        local_path TEXT,
+        UNIQUE(message_id, filename)
       )
     ''');
   }

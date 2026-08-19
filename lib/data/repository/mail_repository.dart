@@ -66,10 +66,18 @@ class MailRepository {
       return _messageDao.getForFolder(folder.id!);
     }
     final password = await _passwordFor(account);
-    final sinceUid = await _messageDao.getMaxUid(folder.id!);
+    // Use the folder's persisted high-water mark, not the max uid among rows
+    // currently present in the folder: deleting/moving the newest message
+    // out of the folder must never lower the sync watermark, or the next
+    // sync will re-fetch and re-insert it (duplicating it wherever it moved).
+    final sinceUid = folder.lastSyncedUid;
     final newHeaders = await _transport.fetchHeadersSince(account, password, folder, sinceUid);
     if (newHeaders.isNotEmpty) {
       await _messageDao.upsertHeaders(newHeaders);
+      final maxFetchedUid = newHeaders.map((m) => m.uid).reduce((a, b) => a > b ? a : b);
+      if (maxFetchedUid > sinceUid) {
+        await _folderDao.updateLastSyncedUid(folder.id!, maxFetchedUid);
+      }
     }
     return _messageDao.getForFolder(folder.id!);
   }
@@ -83,22 +91,40 @@ class MailRepository {
     MailFolder folder,
     MailMessage message,
   ) async {
-    if (message.isDownloaded) {
-      return message;
+    var current = message;
+    if (!current.isDownloaded && current.id != null) {
+      // The passed-in message may come from a cached provider list that was
+      // never invalidated after a previous body fetch. Fall back to the
+      // freshly-read DB row's actual isDownloaded state before deciding
+      // whether a fetch is really needed, so re-opening an already-fetched
+      // message doesn't re-hit IMAP and re-insert its attachments.
+      final dbRow = await _messageDao.getById(current.id!);
+      if (dbRow != null) {
+        current = dbRow;
+      }
+    }
+    if (current.isDownloaded) {
+      return current;
     }
     final password = await _passwordFor(account);
-    final fetched = await _transport.fetchBody(account, password, folder, message);
+    final fetched = await _transport.fetchBody(account, password, folder, current);
     await _messageDao.updateBody(
-      message.id!,
+      current.id!,
       bodyText: fetched.bodyText,
       bodyHtml: fetched.bodyHtml,
     );
-    final attachments = await _transport.fetchAttachmentList(account, password, folder, message);
+    final attachments = await _transport.fetchAttachmentList(account, password, folder, current);
     if (attachments.isNotEmpty) {
       await _attachmentDao.insertAll(attachments);
     }
     return fetched;
   }
+
+  /// Marks a message as read locally. Deliberately minimal: folder-level
+  /// unread COUNTS are not recalculated here (see FolderDao/discoverFolders
+  /// — that's a larger, deliberately deferred feature; see final review
+  /// report).
+  Future<void> markAsRead(int messageId) => _messageDao.updateReadStatus(messageId, true);
 
   Future<List<MailAttachment>> getAttachments(int messageId) {
     return _attachmentDao.getForMessage(messageId);

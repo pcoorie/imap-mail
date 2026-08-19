@@ -9,7 +9,14 @@ class AttachmentDao {
   Future<void> insertAll(List<MailAttachment> attachments) async {
     final batch = _db.batch();
     for (final attachment in attachments) {
-      batch.insert('attachments', attachment.toMap()..remove('id'));
+      // Re-fetching a message's attachment list (e.g. re-opening it) can
+      // observe the same (message_id, filename) again; replace rather than
+      // duplicate, mirroring MessageDao.upsertHeaders's dedupe intent.
+      batch.insert(
+        'attachments',
+        attachment.toMap()..remove('id'),
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     }
     await batch.commit(noResult: true);
   }

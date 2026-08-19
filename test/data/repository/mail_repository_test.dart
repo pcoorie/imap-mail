@@ -120,22 +120,29 @@ void main() {
     expect(folders.firstWhere((f) => f.name == 'Outbox').isLocalOnly, isTrue);
   });
 
-  test('syncHeaders fetches only messages after the highest cached uid', () async {
+  test('syncHeaders fetches only messages after the folder\'s last synced uid', () async {
     final folderId = await folderDao.upsert(
       MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
     );
-    final folder = (await folderDao.getById(folderId))!;
-    await messageDao.upsertHeaders([
-      MailMessage(
-        folderId: folderId,
-        uid: 5,
-        subject: 'Old',
-        from: 'a@example.com',
-        to: 'me@example.com',
-        date: DateTime.utc(2026, 1, 1),
-        snippet: 'old',
-      ),
-    ]);
+    var folder = (await folderDao.getById(folderId))!;
+    // Establish the uid-5 watermark through a real sync (not a direct DAO
+    // write), since the watermark now lives on the folder row, independent
+    // of which message rows are physically present.
+    when(() => transport.fetchHeadersSince(any(), any(), any(), 0)).thenAnswer((_) async => [
+          MailMessage(
+            folderId: folderId,
+            uid: 5,
+            subject: 'Old',
+            from: 'a@example.com',
+            to: 'me@example.com',
+            date: DateTime.utc(2026, 1, 1),
+            snippet: 'old',
+          ),
+        ]);
+    await repository.syncHeaders(account, folder);
+    folder = (await folderDao.getById(folderId))!;
+    expect(folder.lastSyncedUid, 5);
+
     when(() => transport.fetchHeadersSince(any(), any(), any(), 5)).thenAnswer((_) async => [
           MailMessage(
             folderId: folderId,
@@ -152,6 +159,52 @@ void main() {
 
     verify(() => transport.fetchHeadersSince(any(), any(), any(), 5)).called(1);
     expect(messages, hasLength(2));
+  });
+
+  test(
+      'syncHeaders does not regress the sync watermark after the newest message is moved out of the folder (deleteMessage)',
+      () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final trashFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Trash', path: 'Trash', type: MailFolderType.trash),
+    );
+    var folder = (await folderDao.getById(folderId))!;
+    when(() => transport.fetchHeadersSince(any(), any(), any(), 0)).thenAnswer((_) async => [
+          MailMessage(
+            folderId: folderId,
+            uid: 5,
+            subject: 'Only message',
+            from: 'a@example.com',
+            to: 'me@example.com',
+            date: DateTime.utc(2026, 1, 1),
+            snippet: 'only',
+          ),
+        ]);
+    await repository.syncHeaders(account, folder);
+    folder = (await folderDao.getById(folderId))!;
+    expect(folder.lastSyncedUid, 5);
+
+    // Read the top message, then delete it — the common case. This moves
+    // the folder's only (and therefore highest-uid) message out to Trash.
+    final message = (await messageDao.getForFolder(folderId)).first;
+    await repository.deleteMessage(folder, message);
+    expect(await messageDao.getForFolder(folderId), isEmpty);
+    // If the watermark were derived from getMaxUid(folderId) on live rows,
+    // it would now read back as 0 (folder is empty) instead of 5.
+    folder = (await folderDao.getById(folderId))!;
+    expect(folder.lastSyncedUid, 5);
+
+    when(() => transport.fetchHeadersSince(any(), any(), any(), 5)).thenAnswer((_) async => []);
+
+    await repository.syncHeaders(account, folder);
+
+    verify(() => transport.fetchHeadersSince(any(), any(), any(), 5)).called(1);
+    // The re-fetched/re-inserted message must not have resurrected in
+    // either the original folder or in Trash.
+    expect(await messageDao.getForFolder(folderId), isEmpty);
+    expect(await messageDao.getForFolder(trashFolderId), hasLength(1));
   });
 
   test('fetchBodyIfNeeded returns cached message untouched when already downloaded', () async {
@@ -250,6 +303,45 @@ void main() {
     expect(attachments.first.size, 1234);
   });
 
+  test(
+      'fetchBodyIfNeeded does not re-fetch when the passed-in message object is stale (its own isDownloaded is false) but the DB row is already downloaded',
+      () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: folderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final cached = (await messageDao.getForFolder(folderId)).first;
+    when(() => transport.fetchBody(any(), any(), any(), any())).thenAnswer(
+      (_) async => cached.copyWith(bodyText: 'fetched body', isDownloaded: true),
+    );
+    when(() => transport.fetchAttachmentList(any(), any(), any(), any()))
+        .thenAnswer((_) async => <MailAttachment>[]);
+
+    // First open: not yet downloaded, so this legitimately fetches.
+    await repository.fetchBodyIfNeeded(account, folder, cached);
+
+    // Second open: simulates a stale cached provider list where the passed
+    // object's own isDownloaded is still false (never refreshed), even
+    // though the DB row backing it is now downloaded. Must not re-fetch.
+    final result = await repository.fetchBodyIfNeeded(account, folder, cached);
+
+    // Only ever fetched once in total, across both calls.
+    verify(() => transport.fetchBody(any(), any(), any(), any())).called(1);
+    verify(() => transport.fetchAttachmentList(any(), any(), any(), any())).called(1);
+    expect(result.bodyText, 'fetched body');
+  });
+
   test('sendMessage succeeds and caches a sent copy when a Sent folder exists', () async {
     final sentFolderId = await folderDao.upsert(
       MailFolder(accountId: accountId, name: 'Sent', path: 'Sent', type: MailFolderType.sent),
@@ -344,6 +436,29 @@ void main() {
     expect(outboxMessages, hasLength(1));
     expect(outboxMessages.first.sendStatus, MailSendStatus.failed);
     expect(outboxMessages.first.subject, 'Hi');
+  });
+
+  test('markAsRead marks the message read locally', () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: folderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(folderId)).first;
+    expect(message.isRead, isFalse);
+
+    await repository.markAsRead(message.id!);
+
+    expect((await messageDao.getById(message.id!))!.isRead, isTrue);
   });
 
   test('deleteMessage moves the message to Trash when a Trash folder exists and it isn\'t already there', () async {

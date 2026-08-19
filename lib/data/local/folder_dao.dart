@@ -17,13 +17,28 @@ class FolderDao {
       return _db.insert('folders', map);
     }
     final id = existing.first['id'] as int;
+    // Re-discovering a folder from the transport produces a fresh MailFolder
+    // that doesn't know the locally-tracked sync watermark (it would default
+    // to 0). Never let a re-sync of folder metadata regress it.
+    final map = folder.toMap()
+      ..remove('id')
+      ..remove('last_synced_uid');
     await _db.update(
       'folders',
-      folder.toMap()..remove('id'),
+      map,
       where: 'id = ?',
       whereArgs: [id],
     );
     return id;
+  }
+
+  Future<void> updateLastSyncedUid(int id, int uid) async {
+    await _db.update(
+      'folders',
+      {'last_synced_uid': uid},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<List<MailFolder>> getForAccount(int accountId) async {

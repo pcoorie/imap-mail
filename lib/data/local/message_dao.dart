@@ -105,6 +105,15 @@ class MessageDao {
     );
   }
 
+  Future<void> updateReadStatus(int id, bool isRead) async {
+    await _db.update(
+      'messages',
+      {'is_read': isRead ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<void> moveToFolder(int messageId, int newFolderId) async {
     final rows = await _db.rawQuery(
       'SELECT MIN(uid) as min_uid FROM messages WHERE folder_id = ?',

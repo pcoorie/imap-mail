@@ -10,6 +10,7 @@ class MailFolder extends Equatable {
     required this.type,
     this.unreadCount = 0,
     this.isLocalOnly = false,
+    this.lastSyncedUid = 0,
   });
 
   final int? id;
@@ -20,6 +21,12 @@ class MailFolder extends Equatable {
   final int unreadCount;
   final bool isLocalOnly;
 
+  /// High-water mark of the highest UID ever synced into this folder.
+  /// Deliberately independent of which messages are still physically
+  /// present (e.g. deleted/moved out) so it never regresses and re-triggers
+  /// a re-download/re-insert of messages that have since left the folder.
+  final int lastSyncedUid;
+
   MailFolder copyWith({
     int? id,
     int? accountId,
@@ -28,6 +35,7 @@ class MailFolder extends Equatable {
     MailFolderType? type,
     int? unreadCount,
     bool? isLocalOnly,
+    int? lastSyncedUid,
   }) {
     return MailFolder(
       id: id ?? this.id,
@@ -37,6 +45,7 @@ class MailFolder extends Equatable {
       type: type ?? this.type,
       unreadCount: unreadCount ?? this.unreadCount,
       isLocalOnly: isLocalOnly ?? this.isLocalOnly,
+      lastSyncedUid: lastSyncedUid ?? this.lastSyncedUid,
     );
   }
 
@@ -49,6 +58,7 @@ class MailFolder extends Equatable {
       'type': type.name,
       'unread_count': unreadCount,
       'is_local_only': isLocalOnly ? 1 : 0,
+      'last_synced_uid': lastSyncedUid,
     };
   }
 
@@ -61,10 +71,11 @@ class MailFolder extends Equatable {
       type: MailFolderType.values.byName(map['type'] as String),
       unreadCount: map['unread_count'] as int,
       isLocalOnly: (map['is_local_only'] as int) == 1,
+      lastSyncedUid: (map['last_synced_uid'] as int?) ?? 0,
     );
   }
 
   @override
   List<Object?> get props =>
-      [id, accountId, name, path, type, unreadCount, isLocalOnly];
+      [id, accountId, name, path, type, unreadCount, isLocalOnly, lastSyncedUid];
 }
