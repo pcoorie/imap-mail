@@ -1,11 +1,11 @@
 {
-    "name": "imap_mail",
-    "short_name": "imap_mail",
+    "name": "Cobalt Mail",
+    "short_name": "Cobalt Mail",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0A5BD6",
+    "theme_color": "#0A5BD6",
+    "description": "A fast, private IMAP mail client.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
