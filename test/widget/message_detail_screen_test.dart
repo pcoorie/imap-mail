@@ -94,6 +94,34 @@ class _FakeMailTransport implements MailTransport {
     MailMessage message,
   ) async =>
       [];
+
+  @override
+  Future<void> setSeen(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+    bool value,
+  ) async {}
+
+  @override
+  Future<void> setFlagged(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+    bool value,
+  ) async {}
+
+  @override
+  Future<int?> moveMessage(
+    MailAccount account,
+    String password,
+    MailFolder source,
+    MailMessage message,
+    MailFolder destination,
+  ) async =>
+      null;
 }
 
 class _FakeMailSender implements MailSender {
@@ -127,7 +155,11 @@ void main() {
   // established fix). We instead override databaseProvider with a
   // pre-populated in-memory sqflite database and accountsProvider with a
   // fake notifier, exercising the real MailRepository/DAO logic without
-  // touching any platform channel.
+  // touching any platform channel. mailTransportProvider/credentialStoreProvider
+  // are also always overridden now: MessageDetailScreen's _load() fires a
+  // fire-and-forget markRead on every open, which (since markRead syncs to
+  // the server) would otherwise try a real network connection to
+  // imap.example.com and hang the test.
   Future<
       ({
         MailAccount account,
@@ -142,7 +174,7 @@ void main() {
     final db = await databaseFactory.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: AppDatabase.onCreate,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       ),
@@ -201,6 +233,8 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
       ],
       child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
     ));
@@ -225,6 +259,8 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
       ],
       child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
     ));
@@ -246,6 +282,8 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
       ],
       child: MaterialApp(
         home: Navigator(
@@ -285,6 +323,8 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
       ],
       child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
     ));
@@ -384,6 +424,7 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
         credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
         mailSenderProvider.overrideWithValue(sender),
       ],

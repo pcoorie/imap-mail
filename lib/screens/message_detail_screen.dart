@@ -53,9 +53,11 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         });
       }
       // Fire-and-forget: marking a message read shouldn't block or fail the
-      // view from rendering its already-fetched content.
+      // view from rendering its already-fetched content. Swallow any error
+      // (e.g. offline) rather than surfacing it here — this isn't a swipe
+      // action, there's no retry affordance on this screen for it.
       if (resolved.id != null) {
-        unawaited(repository.markAsRead(resolved.id!));
+        unawaited(repository.markRead(account, widget.folder, resolved, true).catchError((_) {}));
       }
     } catch (e) {
       if (mounted) {
@@ -79,7 +81,9 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     if (confirmed == true) {
       try {
         final repository = await ref.read(mailRepositoryProvider.future);
-        await repository.deleteMessage(widget.folder, _resolved ?? widget.message);
+        final accounts = await ref.read(accountsProvider.future);
+        final account = accounts.firstWhere((a) => a.id == widget.folder.accountId);
+        await repository.deleteMessage(account, widget.folder, _resolved ?? widget.message);
         // Without this, the folder view keeps showing the just-deleted
         // message until a manual pull-to-refresh.
         ref.invalidate(messagesProvider(widget.folder));
