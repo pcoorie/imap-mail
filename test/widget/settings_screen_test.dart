@@ -58,6 +58,74 @@ void main() {
 
     expect(fakeNotifier.state, ThemeMode.light);
   });
+
+  testWidgets('theme picker fits a phone-width screen with every segment tappable', (tester) async {
+    // flutter_test's default 800x600 surface hides layout overflow that every
+    // real phone would hit, so pin the surface to a common phone size.
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final fakeNotifier = _FakeThemeModeNotifier(ThemeMode.light);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        themeModeProvider.overrideWith(() => fakeNotifier),
+      ],
+      child: const MaterialApp(home: SettingsScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    // A RenderFlex overflow during layout surfaces here.
+    expect(tester.takeException(), isNull);
+
+    // Every segment must be laid out inside the viewport and hit-testable.
+    for (final label in ['Light', 'Dark', 'System']) {
+      final finder = find.text(label);
+      expect(finder, findsOneWidget, reason: '"$label" segment should be present');
+      final rect = tester.getRect(finder);
+      expect(
+        rect.right,
+        lessThanOrEqualTo(390.0),
+        reason: '"$label" segment must not render past the right screen edge',
+      );
+      expect(rect.left, greaterThanOrEqualTo(0.0), reason: '"$label" segment must not render off the left edge');
+    }
+
+    // Tap through more than just "Light" — "System" is the default and the one
+    // that used to be pushed off-screen.
+    await tester.tap(find.text('System'));
+    await tester.pumpAndSettle();
+    expect(fakeNotifier.state, ThemeMode.system);
+
+    await tester.tap(find.text('Dark'));
+    await tester.pumpAndSettle();
+    expect(fakeNotifier.state, ThemeMode.dark);
+
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('theme picker also fits the narrowest common phone width', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        themeModeProvider.overrideWith(() => _FakeThemeModeNotifier(ThemeMode.system)),
+      ],
+      child: const MaterialApp(home: SettingsScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    for (final label in ['Light', 'Dark', 'System']) {
+      expect(tester.getRect(find.text(label)).right, lessThanOrEqualTo(320.0));
+    }
+  });
 }
 
 class _FakeAccountsNotifier extends AccountsNotifier {

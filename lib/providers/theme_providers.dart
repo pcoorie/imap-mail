@@ -4,32 +4,35 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const _themeModeKey = 'theme_mode';
 
+/// The app's [SharedPreferences] instance, preloaded before the first frame.
+///
+/// It has no default implementation on purpose: `main()` awaits
+/// `SharedPreferences.getInstance()` and overrides this provider in the root
+/// `ProviderScope`, which is what lets [ThemeModeNotifier.build] resolve the
+/// persisted theme synchronously instead of flashing the wrong brightness.
+/// Tests override it with a mock-backed instance.
+final sharedPreferencesProvider = Provider<SharedPreferences>(
+  (ref) => throw UnimplementedError('sharedPreferencesProvider must be overridden in main()'),
+);
+
 class ThemeModeNotifier extends Notifier<ThemeMode> {
-  late Future<void> _readyFuture;
-
-  /// Resolves once a persisted preference (if any) has been loaded and
-  /// applied to state. `build()` can't await this itself — Riverpod
-  /// `Notifier.build()` must return synchronously — so state starts at
-  /// `ThemeMode.system` and is corrected once the load completes. Tests
-  /// await this getter before asserting state; production UI just watches
-  /// the provider normally and will rebuild when state updates.
-  Future<void> get ready => _readyFuture;
-
   @override
   ThemeMode build() {
-    _readyFuture = _load();
-    return ThemeMode.system;
-  }
-
-  Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    state = _fromName(prefs.getString(_themeModeKey));
+    // Synchronous by design: the preference is already in memory, so frame 1
+    // renders the user's real choice.
+    return _fromName(ref.watch(sharedPreferencesProvider).getString(_themeModeKey));
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
+    final previous = state;
     state = mode;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_themeModeKey, mode.name);
+    try {
+      await ref.read(sharedPreferencesProvider).setString(_themeModeKey, mode.name);
+    } catch (_) {
+      // Don't let in-memory state diverge from what's actually stored.
+      state = previous;
+      rethrow;
+    }
   }
 
   ThemeMode _fromName(String? name) {

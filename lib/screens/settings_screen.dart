@@ -34,31 +34,32 @@ class SettingsScreen extends ConsumerWidget {
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Row(
+            // Label above rather than beside the control: label + Spacer +
+            // three icon/label segments needs ~496dp and overflows every
+            // phone width.
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Theme'),
-                const Spacer(),
-                SegmentedButton<ThemeMode>(
-                  segments: const [
-                    ButtonSegment(
-                      value: ThemeMode.light,
-                      label: Text('Light'),
-                      icon: Icon(Icons.light_mode_outlined),
-                    ),
-                    ButtonSegment(
-                      value: ThemeMode.dark,
-                      label: Text('Dark'),
-                      icon: Icon(Icons.dark_mode_outlined),
-                    ),
-                    ButtonSegment(
-                      value: ThemeMode.system,
-                      label: Text('System'),
-                      icon: Icon(Icons.brightness_auto_outlined),
-                    ),
-                  ],
-                  selected: {themeMode},
-                  onSelectionChanged: (selection) =>
-                      ref.read(themeModeProvider.notifier).setThemeMode(selection.first),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<ThemeMode>(
+                    // Icons (both per-segment and the selected checkmark) cost
+                    // roughly 40dp per segment, which is what pushed "System"
+                    // off-screen.
+                    showSelectedIcon: false,
+                    segments: const [
+                      ButtonSegment(value: ThemeMode.light, label: Text('Light')),
+                      ButtonSegment(value: ThemeMode.dark, label: Text('Dark')),
+                      ButtonSegment(value: ThemeMode.system, label: Text('System')),
+                    ],
+                    selected: {themeMode},
+                    // Fire-and-forget: setThemeMode reverts its own state if the
+                    // write fails; surfacing that in the UI is out of scope here.
+                    onSelectionChanged: (selection) =>
+                        ref.read(themeModeProvider.notifier).setThemeMode(selection.first),
+                  ),
                 ),
               ],
             ),
