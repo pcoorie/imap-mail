@@ -189,7 +189,8 @@ void main() {
     // Read the top message, then delete it — the common case. This moves
     // the folder's only (and therefore highest-uid) message out to Trash.
     final message = (await messageDao.getForFolder(folderId)).first;
-    await repository.deleteMessage(folder, message);
+    when(() => transport.moveMessage(any(), any(), any(), any(), any())).thenAnswer((_) async => null);
+    await repository.deleteMessage(account.copyWith(id: accountId), folder, message);
     expect(await messageDao.getForFolder(folderId), isEmpty);
     // If the watermark were derived from getMaxUid(folderId) on live rows,
     // it would now read back as 0 (folder is empty) instead of 5.
@@ -238,7 +239,8 @@ void main() {
     await repository.syncHeaders(account, staleFolder);
 
     final message = (await messageDao.getForFolder(folderId)).first;
-    await repository.deleteMessage(staleFolder, message);
+    when(() => transport.moveMessage(any(), any(), any(), any(), any())).thenAnswer((_) async => null);
+    await repository.deleteMessage(account.copyWith(id: accountId), staleFolder, message);
     expect(await messageDao.getForFolder(folderId), isEmpty);
 
     when(() => transport.fetchHeadersSince(any(), any(), any(), 5)).thenAnswer((_) async => []);
@@ -489,10 +491,11 @@ void main() {
     expect(outboxMessages.first.subject, 'Hi');
   });
 
-  test('markAsRead marks the message read locally', () async {
+  test('markRead marks the message read locally and on the server', () async {
     final folderId = await folderDao.upsert(
       MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
     );
+    final folder = (await folderDao.getById(folderId))!;
     await messageDao.upsertHeaders([
       MailMessage(
         folderId: folderId,
@@ -506,13 +509,183 @@ void main() {
     ]);
     final message = (await messageDao.getForFolder(folderId)).first;
     expect(message.isRead, isFalse);
+    when(() => transport.setSeen(any(), any(), any(), any(), any())).thenAnswer((_) async {});
 
-    await repository.markAsRead(message.id!);
+    await repository.markRead(account.copyWith(id: accountId), folder, message, true);
 
     expect((await messageDao.getById(message.id!))!.isRead, isTrue);
+    verify(() => transport.setSeen(any(), any(), any(), message, true)).called(1);
   });
 
-  test('deleteMessage moves the message to Trash when a Trash folder exists and it isn\'t already there', () async {
+  test('markRead reverts the local change and rethrows when the server call fails', () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: folderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(folderId)).first;
+    when(() => transport.setSeen(any(), any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+    await expectLater(
+      repository.markRead(account.copyWith(id: accountId), folder, message, true),
+      throwsException,
+    );
+
+    expect((await messageDao.getById(message.id!))!.isRead, isFalse);
+  });
+
+  test('markFlagged flags the message locally and on the server', () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: folderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(folderId)).first;
+    when(() => transport.setFlagged(any(), any(), any(), any(), any())).thenAnswer((_) async {});
+
+    await repository.markFlagged(account.copyWith(id: accountId), folder, message, true);
+
+    expect((await messageDao.getById(message.id!))!.isFlagged, isTrue);
+    verify(() => transport.setFlagged(any(), any(), any(), message, true)).called(1);
+  });
+
+  test('markFlagged reverts the local change and rethrows when the server call fails', () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: folderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(folderId)).first;
+    when(() => transport.setFlagged(any(), any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+    await expectLater(
+      repository.markFlagged(account.copyWith(id: accountId), folder, message, true),
+      throwsException,
+    );
+
+    expect((await messageDao.getById(message.id!))!.isFlagged, isFalse);
+  });
+
+  test('archiveMessage moves the message to Archive locally and on the server, and adopts the server\'s new uid', () async {
+    final inboxFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final archiveFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Archive', path: 'Archive', type: MailFolderType.archive),
+    );
+    final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: inboxFolderId,
+        uid: 5,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(inboxFolderId)).first;
+    when(() => transport.moveMessage(any(), any(), any(), any(), any())).thenAnswer((_) async => 42);
+
+    final result = await repository.archiveMessage(account.copyWith(id: accountId), inboxFolder, message);
+
+    expect(result.folderId, archiveFolderId);
+    expect(result.uid, 42);
+    final archived = await messageDao.getForFolder(archiveFolderId);
+    expect(archived, hasLength(1));
+    expect(archived.first.uid, 42);
+    expect(await messageDao.getForFolder(inboxFolderId), isEmpty);
+  });
+
+  test('archiveMessage throws and leaves the message in place when the account has no Archive folder', () async {
+    final inboxFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: inboxFolderId,
+        uid: 5,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(inboxFolderId)).first;
+
+    await expectLater(
+      repository.archiveMessage(account.copyWith(id: accountId), inboxFolder, message),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(await messageDao.getForFolder(inboxFolderId), hasLength(1));
+  });
+
+  test('archiveMessage reverts the local move and rethrows when the server call fails', () async {
+    final inboxFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final archiveFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Archive', path: 'Archive', type: MailFolderType.archive),
+    );
+    final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: inboxFolderId,
+        uid: 5,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(inboxFolderId)).first;
+    when(() => transport.moveMessage(any(), any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+    await expectLater(
+      repository.archiveMessage(account.copyWith(id: accountId), inboxFolder, message),
+      throwsException,
+    );
+
+    expect(await messageDao.getForFolder(inboxFolderId), hasLength(1));
+    expect(await messageDao.getForFolder(archiveFolderId), isEmpty);
+  });
+
+  test('deleteMessage moves the message to Trash locally and on the server when a Trash folder exists and it isn\'t already there', () async {
     final inboxFolderId = await folderDao.upsert(
       MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
     );
@@ -532,9 +705,11 @@ void main() {
       ),
     ]);
     final message = (await messageDao.getForFolder(inboxFolderId)).first;
+    when(() => transport.moveMessage(any(), any(), any(), any(), any())).thenAnswer((_) async => 77);
 
-    await repository.deleteMessage(inboxFolder, message);
+    final result = await repository.deleteMessage(account.copyWith(id: accountId), inboxFolder, message);
 
+    expect(result.folderId, trashFolderId);
     final trashMessages = await messageDao.getForFolder(trashFolderId);
     expect(trashMessages, hasLength(1));
     expect(trashMessages.first.id, message.id);
@@ -542,7 +717,7 @@ void main() {
     expect(inboxMessages, isEmpty);
   });
 
-  test('deleteMessage permanently removes the message when no Trash folder exists', () async {
+  test('deleteMessage permanently removes the message locally (no server call) when no Trash folder exists', () async {
     final inboxFolderId = await folderDao.upsert(
       MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
     );
@@ -560,13 +735,14 @@ void main() {
     ]);
     final message = (await messageDao.getForFolder(inboxFolderId)).first;
 
-    await repository.deleteMessage(inboxFolder, message);
+    await repository.deleteMessage(account.copyWith(id: accountId), inboxFolder, message);
 
     expect(await messageDao.getById(message.id!), isNull);
     expect(await messageDao.getForFolder(inboxFolderId), isEmpty);
+    verifyNever(() => transport.moveMessage(any(), any(), any(), any(), any()));
   });
 
-  test('deleteMessage permanently removes the message when it is already in the Trash folder', () async {
+  test('deleteMessage permanently removes the message locally (no server call) when it is already in the Trash folder', () async {
     final trashFolderId = await folderDao.upsert(
       MailFolder(accountId: accountId, name: 'Trash', path: 'Trash', type: MailFolderType.trash),
     );
@@ -584,9 +760,41 @@ void main() {
     ]);
     final message = (await messageDao.getForFolder(trashFolderId)).first;
 
-    await repository.deleteMessage(trashFolder, message);
+    await repository.deleteMessage(account.copyWith(id: accountId), trashFolder, message);
 
     expect(await messageDao.getById(message.id!), isNull);
+    expect(await messageDao.getForFolder(trashFolderId), isEmpty);
+    verifyNever(() => transport.moveMessage(any(), any(), any(), any(), any()));
+  });
+
+  test('deleteMessage reverts the local move and rethrows when the server call fails', () async {
+    final inboxFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final trashFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Trash', path: 'Trash', type: MailFolderType.trash),
+    );
+    final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: inboxFolderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(inboxFolderId)).first;
+    when(() => transport.moveMessage(any(), any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+    await expectLater(
+      repository.deleteMessage(account.copyWith(id: accountId), inboxFolder, message),
+      throwsException,
+    );
+
+    expect(await messageDao.getForFolder(inboxFolderId), hasLength(1));
     expect(await messageDao.getForFolder(trashFolderId), isEmpty);
   });
 }
