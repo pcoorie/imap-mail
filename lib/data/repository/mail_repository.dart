@@ -148,7 +148,14 @@ class MailRepository {
       }
       return message.copyWith(folderId: to.id!, uid: newUid ?? message.uid);
     } catch (_) {
-      await _messageDao.moveToFolder(message.id!, from.id!);
+      // Restore the ORIGINAL uid explicitly. `message` is the untouched
+      // method parameter (never reassigned above), so message.uid is still
+      // the pre-move value. Reverting without it would make
+      // MessageDao.moveToFolder synthesize a fresh negative placeholder,
+      // permanently destroying the message's real server UID on every
+      // failed move — i.e. exactly the offline/server-error case this
+      // revert exists for.
+      await _messageDao.moveToFolder(message.id!, from.id!, newUid: message.uid);
       rethrow;
     }
   }
@@ -168,23 +175,43 @@ class MailRepository {
     return moveMessage(account, currentFolder, archiveFolder, message);
   }
 
+  /// Whether [message] carries a UID the IMAP server would actually
+  /// recognise. Negative uids are this codebase's synthetic local
+  /// placeholders (see [MessageDao.moveToFolder] / [MessageDao.insertLocal])
+  /// — assigned to locally-created rows, and to moved rows whose server
+  /// didn't report a post-move UID (no UIDPLUS/`COPYUID`). Addressing the
+  /// server with one would send a meaningless `UID STORE -1 ...`, which
+  /// `MessageSequence.fromId` does not validate.
+  static bool _hasServerUid(MailMessage message) => message.uid >= 0;
+
   /// Marks a message's read status both locally and on the IMAP server.
   /// Optimistic: the local row updates first, then the `\Seen` flag is
   /// stored on the server. On failure the local row is reverted to its
   /// prior value and the error rethrown.
+  ///
+  /// Set [revertLocalOnFailure] to false for call sites that have no retry
+  /// affordance (the automatic mark-read-when-opened path): those still
+  /// attempt the server sync and still rethrow, but keep the local read
+  /// flag so reading a cached message offline isn't silently undone.
   Future<void> markRead(
     MailAccount account,
     MailFolder folder,
     MailMessage message,
-    bool isRead,
-  ) async {
+    bool isRead, {
+    bool revertLocalOnFailure = true,
+  }) async {
     final previous = message.isRead;
     await _messageDao.updateReadStatus(message.id!, isRead);
+    // Local-only/placeholder-uid rows have nothing addressable on the
+    // server; the local write above is the whole operation.
+    if (!_hasServerUid(message)) return;
     try {
       final password = await _passwordFor(account);
       await _transport.setSeen(account, password, folder, message, isRead);
     } catch (_) {
-      await _messageDao.updateReadStatus(message.id!, previous);
+      if (revertLocalOnFailure) {
+        await _messageDao.updateReadStatus(message.id!, previous);
+      }
       rethrow;
     }
   }
@@ -199,6 +226,8 @@ class MailRepository {
   ) async {
     final previous = message.isFlagged;
     await _messageDao.updateFlagStatus(message.id!, isFlagged);
+    // See markRead: never address the server with a synthetic uid.
+    if (!_hasServerUid(message)) return;
     try {
       final password = await _passwordFor(account);
       await _transport.setFlagged(account, password, folder, message, isFlagged);

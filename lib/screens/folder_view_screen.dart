@@ -165,14 +165,12 @@ class _MessageListState extends ConsumerState<_MessageList> {
               return Slidable(
                 key: ValueKey(message.id),
                 startActionPane: _buildActionPane(
-                  context,
                   ref,
                   primary: swipeConfig.leftPrimary,
                   secondary: swipeConfig.leftSecondary,
                   message: message,
                 ),
                 endActionPane: _buildActionPane(
-                  context,
                   ref,
                   primary: swipeConfig.rightPrimary,
                   secondary: swipeConfig.rightSecondary,
@@ -204,7 +202,6 @@ class _MessageListState extends ConsumerState<_MessageList> {
   /// action too, so a full swipe always does *something* useful when at
   /// least one slot on that side is configured.
   ActionPane? _buildActionPane(
-    BuildContext context,
     WidgetRef ref, {
     required SwipeAction primary,
     required SwipeAction secondary,
@@ -234,7 +231,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
         // animation first, leaving a zombie row (or tripping
         // flutter_slidable's "dismissed widget still in tree" assertion)
         // whenever the message doesn't actually disappear from this folder.
-        confirmDismiss: () => _performSwipeAction(context, ref, swipeFolder, dismissAction, message),
+        confirmDismiss: () => _performSwipeAction(ref, swipeFolder, dismissAction, message),
         closeOnCancel: true,
         onDismissed: () {
           // Only reached when confirmDismiss returned true (the message was
@@ -250,7 +247,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
       children: [
         for (final action in configured)
           SlidableAction(
-            onPressed: (_) => _performSwipeAction(context, ref, swipeFolder, action, message),
+            onPressed: (_) => _performSwipeAction(ref, swipeFolder, action, message),
             icon: _iconFor(action),
             label: action.label,
             backgroundColor: _colorFor(action),
@@ -283,21 +280,42 @@ class _MessageListState extends ConsumerState<_MessageList> {
   /// this is also used by DismissiblePane's confirmDismiss to decide whether
   /// the dismiss/resize animation should proceed at all. Returns false for
   /// non-removing actions (flag, toggleRead) or if the repository call threw.
+  ///
+  /// Deliberately takes no BuildContext: it runs across awaits that can
+  /// outlive both the individual list row and this whole list, so it
+  /// resolves the ScaffoldMessenger once up front (while definitely mounted)
+  /// and never touches a possibly-defunct context afterwards.
   Future<bool> _performSwipeAction(
-    BuildContext context,
     WidgetRef ref,
     MailFolder folder,
     SwipeAction action,
     MailMessage message,
   ) async {
     if (action == SwipeAction.none) return false;
-    final repository = await ref.read(mailRepositoryProvider.future);
-    final accounts = await ref.read(accountsProvider.future);
-    final account = accounts.firstWhere((a) => a.id == folder.accountId);
+    // Resolved before any await, from this State's own context (not a list
+    // row's, which can be unmounted independently). The messenger itself is
+    // owned by the app-level Scaffold and outlives this list.
+    final messenger = mounted ? ScaffoldMessenger.maybeOf(context) : null;
     try {
+      // Account/repository resolution lives INSIDE the try: a failure here
+      // (provider error, or firstWhere finding no matching account) must
+      // resolve confirmDismiss's future to `false` — an erroring future
+      // instead leaves the row stuck open past the dismiss threshold with
+      // nothing to close it.
+      //
+      // Every `mounted` check below guards a subsequent `ref` use: reading
+      // or invalidating through a disposed ConsumerState's `ref` throws a
+      // StateError (popping the folder view or switching accounts during a
+      // slow archive/delete is enough to hit it).
+      final repository = await ref.read(mailRepositoryProvider.future);
+      if (!mounted) return false;
+      final accounts = await ref.read(accountsProvider.future);
+      if (!mounted) return false;
+      final account = accounts.firstWhere((a) => a.id == folder.accountId);
       switch (action) {
         case SwipeAction.archive:
           final moved = await repository.archiveMessage(account, folder, message);
+          if (!mounted) return false;
           ref.invalidate(messagesProvider(folder));
           // Re-fetch from the DAO rather than trusting `moved`'s uid
           // directly: when the server doesn't report a new UID on move (no
@@ -306,11 +324,13 @@ class _MessageListState extends ConsumerState<_MessageList> {
           // uid. Undo's server-side move-back must use whatever uid is
           // actually persisted, so re-read it fresh here.
           final freshList = await repository.getCachedMessages(moved.folderId);
+          if (!mounted) return false;
           final freshMessage = freshList.firstWhere((m) => m.id == moved.id, orElse: () => moved);
-          _showUndoSnackBar(context, ref, account, folder, freshMessage, 'Archived');
+          _showUndoSnackBar(ref, account, folder, freshMessage, 'Archived');
           return true;
         case SwipeAction.delete:
           final result = await repository.deleteMessage(account, folder, message);
+          if (!mounted) return false;
           ref.invalidate(messagesProvider(folder));
           // Only offer Undo when the message actually moved (a permanent
           // removal — no Trash folder, or already in Trash — can't be
@@ -320,8 +340,9 @@ class _MessageListState extends ConsumerState<_MessageList> {
             // See the archive branch above for why we re-fetch instead of
             // trusting `result`'s uid directly.
             final freshList = await repository.getCachedMessages(result.folderId);
+            if (!mounted) return false;
             final freshMessage = freshList.firstWhere((m) => m.id == result.id, orElse: () => result);
-            _showUndoSnackBar(context, ref, account, folder, freshMessage, 'Deleted');
+            _showUndoSnackBar(ref, account, folder, freshMessage, 'Deleted');
           }
           return true;
         case SwipeAction.flag:
@@ -333,16 +354,22 @@ class _MessageListState extends ConsumerState<_MessageList> {
         case SwipeAction.none:
           break;
       }
+      if (!mounted) return false;
       ref.invalidate(messagesProvider(folder));
       return false;
     } catch (e) {
-      ref.invalidate(messagesProvider(folder));
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      if (mounted) {
+        ref.invalidate(messagesProvider(folder));
+      }
+      // Use the messenger captured before the awaits: `context` may belong
+      // to a list item that has since been unmounted, but the failure still
+      // deserves feedback.
+      if (messenger != null && messenger.mounted) {
+        messenger.showSnackBar(SnackBar(
           content: Text("Couldn't ${action.label.toLowerCase()} — $e"),
           action: SnackBarAction(
             label: 'Retry',
-            onPressed: () => _performSwipeAction(context, ref, folder, action, message),
+            onPressed: () => _performSwipeAction(ref, folder, action, message),
           ),
         ));
       }
@@ -351,26 +378,59 @@ class _MessageListState extends ConsumerState<_MessageList> {
   }
 
   void _showUndoSnackBar(
-    BuildContext context,
     WidgetRef ref,
     MailAccount account,
     MailFolder originalFolder,
     MailMessage movedMessage,
     String verb,
   ) {
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(verb),
-      action: SnackBarAction(
-        label: 'Undo',
-        onPressed: () async {
-          final repository = await ref.read(mailRepositoryProvider.future);
-          final folders = await repository.getCachedFolders(originalFolder.accountId);
-          final currentFolder = folders.firstWhere((f) => f.id == movedMessage.folderId);
-          await repository.moveMessage(account, currentFolder, originalFolder, movedMessage);
-          ref.invalidate(messagesProvider(originalFolder));
-        },
-      ),
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+
+    // A move whose server didn't report a post-move UID (no UIDPLUS) is
+    // persisted under a synthetic negative placeholder uid. Undoing it would
+    // move it back by that uid — i.e. send `UID MOVE -1 ...`, which
+    // MessageSequence.fromId happily builds and the server cannot honour.
+    // Offer no Undo in that case rather than an affordance that can only
+    // fail.
+    final canUndo = movedMessage.uid >= 0;
+
+    messenger.showSnackBar(SnackBar(
+      content: Text(canUndo ? verb : "$verb — can't be undone"),
+      action: canUndo
+          ? SnackBarAction(
+              label: 'Undo',
+              onPressed: () async {
+                // Everything here can fail (offline, the message's folder no
+                // longer cached, this list disposed while the snackbar was
+                // still up). Unhandled, the user taps Undo and sees nothing
+                // happen at all; the repository already reverts its own
+                // local state, so this is purely about feedback.
+                try {
+                  if (!mounted) {
+                    throw StateError('the message list is no longer open');
+                  }
+                  final repository = await ref.read(mailRepositoryProvider.future);
+                  final folders = await repository.getCachedFolders(originalFolder.accountId);
+                  final currentFolder = folders.firstWhere(
+                    (f) => f.id == movedMessage.folderId,
+                    orElse: () => throw StateError(
+                        'the folder it was moved to is no longer available'),
+                  );
+                  await repository.moveMessage(account, currentFolder, originalFolder, movedMessage);
+                  if (!mounted) return;
+                  ref.invalidate(messagesProvider(originalFolder));
+                } catch (e) {
+                  if (messenger.mounted) {
+                    messenger.showSnackBar(
+                      SnackBar(content: Text("Couldn't undo — $e")),
+                    );
+                  }
+                }
+              },
+            )
+          : null,
     ));
   }
 }

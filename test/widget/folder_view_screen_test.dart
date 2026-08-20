@@ -371,4 +371,119 @@ void main() {
     expect(find.text('Hello'), findsOneWidget);
     expect(find.textContaining("Couldn't archive"), findsOneWidget);
   });
+
+  testWidgets(
+      'offers no Undo when the moved message ended up with a synthetic '
+      'negative uid (server reported no new UID)', (tester) async {
+    final repository = MockMailRepository();
+    // uid < 0 is this codebase's synthetic-placeholder convention: the move
+    // succeeded but the server never told us the new UID (no UIDPLUS), so
+    // there is no uid an Undo could legitimately move back by. Offering
+    // Undo anyway would send `UID MOVE -1 ...`.
+    final archivedMessage = message.copyWith(folderId: 4, uid: -1);
+    when(() => repository.archiveMessage(any(), any(), any())).thenAnswer((_) async => archivedMessage);
+    when(() => repository.getCachedMessages(any())).thenAnswer((_) async => [archivedMessage]);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    // Partial swipe to reveal the start pane, then tap Archive (avoids the
+    // full-swipe dismissal path; this test is only about the snackbar).
+    await tester.drag(find.text('Hello'), const Offset(300, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Archive'));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(SnackBar, 'Archived'), findsNothing);
+    expect(find.textContaining("can't be undone"), findsOneWidget);
+    expect(find.text('Undo'), findsNothing);
+  });
+
+  testWidgets('a failed Undo reports the failure instead of silently doing nothing', (tester) async {
+    final repository = MockMailRepository();
+    final archivedMessage = message.copyWith(folderId: 4, uid: 42);
+    when(() => repository.archiveMessage(any(), any(), any())).thenAnswer((_) async => archivedMessage);
+    when(() => repository.getCachedMessages(any())).thenAnswer((_) async => [archivedMessage]);
+    when(() => repository.getCachedFolders(any())).thenAnswer((_) async => [inbox, sent, trash, archive]);
+    when(() => repository.moveMessage(any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.text('Hello'), const Offset(300, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Archive'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Undo'), findsOneWidget);
+
+    // Unguarded, this await turns into an unhandled async error: the user
+    // taps Undo, the move-back fails, and nothing visible happens at all.
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining("Couldn't undo"), findsOneWidget);
+  });
+
+  testWidgets(
+      'disposing the message list mid-action does not throw when the '
+      'repository call finally resolves', (tester) async {
+    final repository = MockMailRepository();
+    final archivedMessage = message.copyWith(folderId: 4, uid: 42);
+    final archiveCompleter = Completer<MailMessage>();
+    when(() => repository.archiveMessage(any(), any(), any())).thenAnswer((_) => archiveCompleter.future);
+    when(() => repository.getCachedMessages(any())).thenAnswer((_) async => [archivedMessage]);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.text('Hello'), const Offset(300, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Archive'));
+    // Single pumps only: _performSwipeAction is now suspended awaiting
+    // archiveCompleter.future.
+    await tester.pump();
+    await tester.pump();
+
+    // Tear the whole screen (and its ProviderScope) down while the archive
+    // is still in flight — the equivalent of popping the folder view or
+    // switching accounts mid-action.
+    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SizedBox())));
+
+    // Now let it resolve. Every post-await `ref.read`/`ref.invalidate` in
+    // _performSwipeAction is reached from a disposed ConsumerState, which
+    // throws a StateError unless guarded by `mounted`.
+    archiveCompleter.complete(archivedMessage);
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+  });
 }

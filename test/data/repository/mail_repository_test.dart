@@ -542,6 +542,96 @@ void main() {
     );
 
     expect((await messageDao.getById(message.id!))!.isRead, isFalse);
+    // A revert must never disturb the message's identity on the server.
+    expect((await messageDao.getById(message.id!))!.uid, 1);
+  });
+
+  test(
+      'markRead with revertLocalOnFailure: false keeps the local read flag when the server call fails (still rethrows)',
+      () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: folderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    final message = (await messageDao.getForFolder(folderId)).first;
+    when(() => transport.setSeen(any(), any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+    await expectLater(
+      repository.markRead(
+        account.copyWith(id: accountId),
+        folder,
+        message,
+        true,
+        revertLocalOnFailure: false,
+      ),
+      throwsException,
+    );
+
+    // The server sync was still attempted...
+    verify(() => transport.setSeen(any(), any(), any(), any(), any())).called(1);
+    // ...but the local read flag stands (this is the auto-mark-read-on-open
+    // call site's behavior: no Retry affordance, so reverting would silently
+    // undo the user's read state while offline).
+    expect((await messageDao.getById(message.id!))!.isRead, isTrue);
+  });
+
+  test('markRead on a message with a synthetic (negative) uid skips the server round-trip', () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Archive', path: 'Archive', type: MailFolderType.archive),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    // insertLocal always assigns a synthetic negative placeholder uid — the
+    // same convention moveToFolder uses when the server reports no new UID.
+    final messageId = await messageDao.insertLocal(MailMessage(
+      folderId: folderId,
+      uid: 0,
+      subject: 'Subject',
+      from: 'a@example.com',
+      to: 'me@example.com',
+      date: DateTime.utc(2026, 8, 19),
+      snippet: 'snippet',
+    ));
+    final message = (await messageDao.getById(messageId))!;
+    expect(message.uid, lessThan(0));
+
+    await repository.markRead(account.copyWith(id: accountId), folder, message, true);
+
+    expect((await messageDao.getById(messageId))!.isRead, isTrue);
+    verifyNever(() => transport.setSeen(any(), any(), any(), any(), any()));
+  });
+
+  test('markFlagged on a message with a synthetic (negative) uid skips the server round-trip', () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Archive', path: 'Archive', type: MailFolderType.archive),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    final messageId = await messageDao.insertLocal(MailMessage(
+      folderId: folderId,
+      uid: 0,
+      subject: 'Subject',
+      from: 'a@example.com',
+      to: 'me@example.com',
+      date: DateTime.utc(2026, 8, 19),
+      snippet: 'snippet',
+    ));
+    final message = (await messageDao.getById(messageId))!;
+    expect(message.uid, lessThan(0));
+
+    await repository.markFlagged(account.copyWith(id: accountId), folder, message, true);
+
+    expect((await messageDao.getById(messageId))!.isFlagged, isTrue);
+    verifyNever(() => transport.setFlagged(any(), any(), any(), any(), any()));
   });
 
   test('markFlagged flags the message locally and on the server', () async {
@@ -594,6 +684,8 @@ void main() {
     );
 
     expect((await messageDao.getById(message.id!))!.isFlagged, isFalse);
+    // A revert must never disturb the message's identity on the server.
+    expect((await messageDao.getById(message.id!))!.uid, 1);
   });
 
   test('archiveMessage moves the message to Archive locally and on the server, and adopts the server\'s new uid', () async {
@@ -681,8 +773,16 @@ void main() {
       throwsException,
     );
 
-    expect(await messageDao.getForFolder(inboxFolderId), hasLength(1));
+    final reverted = await messageDao.getForFolder(inboxFolderId);
+    expect(reverted, hasLength(1));
     expect(await messageDao.getForFolder(archiveFolderId), isEmpty);
+    // The revert must restore the message's ORIGINAL uid. Reverting without
+    // one makes MessageDao.moveToFolder synthesize a negative placeholder,
+    // permanently losing the real UID: every later fetchBody/flag/mark-read/
+    // move on this row would then issue `UID FETCH -1` and fail, and
+    // syncHeaders never repairs it (it only fetches above the watermark).
+    expect(reverted.first.uid, 5);
+    expect((await messageDao.getById(message.id!))!.uid, 5);
   });
 
   test('deleteMessage moves the message to Trash locally and on the server when a Trash folder exists and it isn\'t already there', () async {
@@ -794,7 +894,60 @@ void main() {
       throwsException,
     );
 
-    expect(await messageDao.getForFolder(inboxFolderId), hasLength(1));
+    final reverted = await messageDao.getForFolder(inboxFolderId);
+    expect(reverted, hasLength(1));
     expect(await messageDao.getForFolder(trashFolderId), isEmpty);
+    // See the archive revert test above: the original uid must survive.
+    expect(reverted.first.uid, 1);
+    expect((await messageDao.getById(message.id!))!.uid, 1);
+  });
+
+  test(
+      'a failed move restores the original uid even when the source folder already holds a synthetic-uid message '
+      '(the placeholder the buggy revert would have synthesized)',
+      () async {
+    final inboxFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final archiveFolderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'Archive', path: 'Archive', type: MailFolderType.archive),
+    );
+    final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: inboxFolderId,
+        uid: 9,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+      ),
+    ]);
+    // A pre-existing local-only row in the same folder pushes the synthetic
+    // uid the buggy revert path would pick down to -2, so this test would
+    // still catch the bug even if -1 happened to collide with something.
+    await messageDao.insertLocal(MailMessage(
+      folderId: inboxFolderId,
+      uid: 0,
+      subject: 'Local draft',
+      from: 'me@example.com',
+      to: 'b@example.com',
+      date: DateTime.utc(2026, 8, 18),
+      snippet: 'draft',
+    ));
+    final message = (await messageDao.getForFolder(inboxFolderId)).firstWhere((m) => m.subject == 'Subject');
+    expect(message.uid, 9);
+    when(() => transport.moveMessage(any(), any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+    await expectLater(
+      repository.archiveMessage(account.copyWith(id: accountId), inboxFolder, message),
+      throwsException,
+    );
+
+    final refreshed = (await messageDao.getById(message.id!))!;
+    expect(refreshed.folderId, inboxFolderId);
+    expect(refreshed.uid, 9, reason: 'uid must be restored as-is, never re-synthesized');
+    expect(await messageDao.getForFolder(archiveFolderId), isEmpty);
   });
 }
