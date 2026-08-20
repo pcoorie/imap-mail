@@ -65,4 +65,18 @@ void main() {
     expect(attachment.mimeType, 'application/pdf');
     expect(attachment.size, 1234);
   });
+
+  test('maps isFlagged from the underlying MimeMessage flag', () {
+    final builder = MessageBuilder()
+      ..from = [MailAddress('Alice', 'alice@example.com')]
+      ..to = [MailAddress('Bob', 'bob@example.com')]
+      ..subject = 'Important'
+      ..text = 'Please flag this.';
+    final mime = builder.buildMimeMessage();
+    mime.isFlagged = true;
+
+    final message = mapMimeMessageToRecord(mime, folderId: 7);
+
+    expect(message.isFlagged, isTrue);
+  });
 }

@@ -14,6 +14,7 @@ class MailMessage extends Equatable {
     this.bodyText,
     this.bodyHtml,
     this.isRead = false,
+    this.isFlagged = false,
     this.isDownloaded = false,
     this.sendStatus = MailSendStatus.none,
   });
@@ -29,6 +30,7 @@ class MailMessage extends Equatable {
   final String? bodyText;
   final String? bodyHtml;
   final bool isRead;
+  final bool isFlagged;
   final bool isDownloaded;
   final MailSendStatus sendStatus;
 
@@ -44,6 +46,7 @@ class MailMessage extends Equatable {
     String? bodyText,
     String? bodyHtml,
     bool? isRead,
+    bool? isFlagged,
     bool? isDownloaded,
     MailSendStatus? sendStatus,
   }) {
@@ -59,6 +62,7 @@ class MailMessage extends Equatable {
       bodyText: bodyText ?? this.bodyText,
       bodyHtml: bodyHtml ?? this.bodyHtml,
       isRead: isRead ?? this.isRead,
+      isFlagged: isFlagged ?? this.isFlagged,
       isDownloaded: isDownloaded ?? this.isDownloaded,
       sendStatus: sendStatus ?? this.sendStatus,
     );
@@ -77,6 +81,7 @@ class MailMessage extends Equatable {
       'body_text': bodyText,
       'body_html': bodyHtml,
       'is_read': isRead ? 1 : 0,
+      'is_flagged': isFlagged ? 1 : 0,
       'is_downloaded': isDownloaded ? 1 : 0,
       'send_status': sendStatus.name,
     };
@@ -95,6 +100,7 @@ class MailMessage extends Equatable {
       bodyText: map['body_text'] as String?,
       bodyHtml: map['body_html'] as String?,
       isRead: (map['is_read'] as int) == 1,
+      isFlagged: ((map['is_flagged'] as int?) ?? 0) == 1,
       isDownloaded: (map['is_downloaded'] as int) == 1,
       sendStatus: MailSendStatus.values.byName(map['send_status'] as String),
     );
@@ -113,6 +119,7 @@ class MailMessage extends Equatable {
         bodyText,
         bodyHtml,
         isRead,
+        isFlagged,
         isDownloaded,
         sendStatus,
       ];

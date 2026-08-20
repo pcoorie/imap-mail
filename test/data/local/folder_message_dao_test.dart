@@ -212,5 +212,55 @@ void main() {
       final inboxMessages = await messageDao.getForFolder(folderId);
       expect(inboxMessages, isEmpty);
     });
+
+    test('updateFlagStatus sets is_flagged', () async {
+      final folderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+      await messageDao.upsertHeaders([
+        MailMessage(
+          folderId: folderId,
+          uid: 1,
+          subject: 'Subject',
+          from: 'a@example.com',
+          to: 'me@example.com',
+          date: DateTime.utc(2026, 8, 19),
+          snippet: 'snippet',
+        ),
+      ]);
+      final message = (await messageDao.getForFolder(folderId)).first;
+      expect(message.isFlagged, isFalse);
+
+      await messageDao.updateFlagStatus(message.id!, true);
+
+      expect((await messageDao.getById(message.id!))!.isFlagged, isTrue);
+    });
+
+    test('moveToFolder uses the given newUid instead of synthesizing one when provided', () async {
+      final sourceFolderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+      final destFolderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'Archive', path: 'Archive', type: MailFolderType.archive),
+      );
+      await messageDao.upsertHeaders([
+        MailMessage(
+          folderId: sourceFolderId,
+          uid: 7,
+          subject: 'Subject',
+          from: 'a@example.com',
+          to: 'me@example.com',
+          date: DateTime.utc(2026, 8, 19),
+          snippet: 'snippet',
+        ),
+      ]);
+      final message = (await messageDao.getForFolder(sourceFolderId)).first;
+
+      await messageDao.moveToFolder(message.id!, destFolderId, newUid: 99);
+
+      final moved = await messageDao.getById(message.id!);
+      expect(moved!.folderId, destFolderId);
+      expect(moved.uid, 99);
+    });
   });
 }

@@ -46,6 +46,7 @@ class AppDatabase {
         body_text TEXT,
         body_html TEXT,
         is_read INTEGER NOT NULL DEFAULT 0,
+        is_flagged INTEGER NOT NULL DEFAULT 0,
         is_downloaded INTEGER NOT NULL DEFAULT 0,
         send_status TEXT NOT NULL DEFAULT 'none',
         UNIQUE(folder_id, uid)
@@ -65,13 +66,20 @@ class AppDatabase {
     ''');
   }
 
+  static Future<void> onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await db.execute('ALTER TABLE messages ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0');
+    }
+  }
+
   static Future<Database> open() async {
     final dir = await getApplicationDocumentsDirectory();
     final path = p.join(dir.path, 'imap_mail.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: onCreate,
+      onUpgrade: onUpgrade,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
     );
   }
