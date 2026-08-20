@@ -213,16 +213,44 @@ class _MessageListState extends ConsumerState<_MessageList> {
     final configured = [primary, secondary].where((a) => a != SwipeAction.none).toList();
     if (configured.isEmpty) return null;
     final dismissAction = primary != SwipeAction.none ? primary : secondary;
+    // Capture the folder this message is actually displayed under right now
+    // — not read lazily later via the `folder` getter (== widget.folder).
+    // `_MessageList` has no key, so switching folder tabs updates
+    // widget.folder on this same State instead of recreating it; if a swipe
+    // action's awaits were still in flight when that happened, reading
+    // `folder` again afterwards would invalidate/undo into the newly
+    // selected folder instead of the one this swipe actually started in.
+    final swipeFolder = folder;
 
     return ActionPane(
       motion: const DrawerMotion(),
       dismissible: DismissiblePane(
-        onDismissed: () => _performSwipeAction(context, ref, dismissAction, message),
+        // The action itself runs here, not in onDismissed: confirmDismiss
+        // is awaited *before* flutter_slidable commits to the resize/dismiss
+        // animation, so returning false (action didn't actually remove the
+        // message — flag/toggleRead, or the repository call threw) vetoes
+        // the animation entirely and the pane just closes back up. Running
+        // the action in onDismissed instead would commit to the resize
+        // animation first, leaving a zombie row (or tripping
+        // flutter_slidable's "dismissed widget still in tree" assertion)
+        // whenever the message doesn't actually disappear from this folder.
+        confirmDismiss: () => _performSwipeAction(context, ref, swipeFolder, dismissAction, message),
+        closeOnCancel: true,
+        onDismissed: () {
+          // Only reached when confirmDismiss returned true (the message was
+          // actually removed) and the resize animation has finished. Mark it
+          // pending-removal now so a stale/in-flight messagesProvider
+          // refresh (see _pendingRemoval's doc comment) can't resurrect this
+          // same Slidable under the same key before the refresh lands.
+          if (mounted && message.id != null) {
+            setState(() => _pendingRemoval.add(message.id!));
+          }
+        },
       ),
       children: [
         for (final action in configured)
           SlidableAction(
-            onPressed: (_) => _performSwipeAction(context, ref, action, message),
+            onPressed: (_) => _performSwipeAction(context, ref, swipeFolder, action, message),
             icon: _iconFor(action),
             label: action.label,
             backgroundColor: _colorFor(action),
@@ -247,13 +275,22 @@ class _MessageListState extends ConsumerState<_MessageList> {
         SwipeAction.none => Colors.grey,
       };
 
-  Future<void> _performSwipeAction(
+  /// Runs [action] against [message] (which belongs to [folder] — captured
+  /// by the caller at the moment the gesture/tap started, never re-read from
+  /// the `folder` getter after an await; see the doc comment where this is
+  /// called from). Returns true if the message actually left [folder]
+  /// (archive, or a delete that moved-to-Trash or permanently removed it) —
+  /// this is also used by DismissiblePane's confirmDismiss to decide whether
+  /// the dismiss/resize animation should proceed at all. Returns false for
+  /// non-removing actions (flag, toggleRead) or if the repository call threw.
+  Future<bool> _performSwipeAction(
     BuildContext context,
     WidgetRef ref,
+    MailFolder folder,
     SwipeAction action,
     MailMessage message,
   ) async {
-    if (action == SwipeAction.none) return;
+    if (action == SwipeAction.none) return false;
     final repository = await ref.read(mailRepositoryProvider.future);
     final accounts = await ref.read(accountsProvider.future);
     final account = accounts.firstWhere((a) => a.id == folder.accountId);
@@ -261,7 +298,6 @@ class _MessageListState extends ConsumerState<_MessageList> {
       switch (action) {
         case SwipeAction.archive:
           final moved = await repository.archiveMessage(account, folder, message);
-          if (mounted && message.id != null) setState(() => _pendingRemoval.add(message.id!));
           ref.invalidate(messagesProvider(folder));
           // Re-fetch from the DAO rather than trusting `moved`'s uid
           // directly: when the server doesn't report a new UID on move (no
@@ -272,14 +308,14 @@ class _MessageListState extends ConsumerState<_MessageList> {
           final freshList = await repository.getCachedMessages(moved.folderId);
           final freshMessage = freshList.firstWhere((m) => m.id == moved.id, orElse: () => moved);
           _showUndoSnackBar(context, ref, account, folder, freshMessage, 'Archived');
-          return;
+          return true;
         case SwipeAction.delete:
           final result = await repository.deleteMessage(account, folder, message);
-          if (mounted && message.id != null) setState(() => _pendingRemoval.add(message.id!));
           ref.invalidate(messagesProvider(folder));
           // Only offer Undo when the message actually moved (a permanent
           // removal — no Trash folder, or already in Trash — can't be
-          // undone).
+          // undone). Either way it left `folder`, so this branch always
+          // returns true below.
           if (result.folderId != folder.id) {
             // See the archive branch above for why we re-fetch instead of
             // trusting `result`'s uid directly.
@@ -287,7 +323,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
             final freshMessage = freshList.firstWhere((m) => m.id == result.id, orElse: () => result);
             _showUndoSnackBar(context, ref, account, folder, freshMessage, 'Deleted');
           }
-          return;
+          return true;
         case SwipeAction.flag:
           await repository.markFlagged(account, folder, message, !message.isFlagged);
           break;
@@ -298,6 +334,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
           break;
       }
       ref.invalidate(messagesProvider(folder));
+      return false;
     } catch (e) {
       ref.invalidate(messagesProvider(folder));
       if (context.mounted) {
@@ -305,10 +342,11 @@ class _MessageListState extends ConsumerState<_MessageList> {
           content: Text("Couldn't ${action.label.toLowerCase()} — $e"),
           action: SnackBarAction(
             label: 'Retry',
-            onPressed: () => _performSwipeAction(context, ref, action, message),
+            onPressed: () => _performSwipeAction(context, ref, folder, action, message),
           ),
         ));
       }
+      return false;
     }
   }
 

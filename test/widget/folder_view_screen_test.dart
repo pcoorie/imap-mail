@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -225,5 +227,148 @@ void main() {
     await tester.pumpAndSettle();
 
     verify(() => repository.markRead(account, inbox, message, true)).called(1);
+  });
+
+  testWidgets(
+      'switching folder tabs mid-swipe still invalidates/undoes into the '
+      'ORIGINAL folder, not the newly-selected one', (tester) async {
+    final repository = MockMailRepository();
+    final archivedMessage = message.copyWith(folderId: 4);
+    final archiveCompleter = Completer<MailMessage>();
+    when(() => repository.archiveMessage(any(), any(), any())).thenAnswer((_) => archiveCompleter.future);
+    when(() => repository.getCachedMessages(any())).thenAnswer((_) async => [archivedMessage]);
+    when(() => repository.getCachedFolders(any())).thenAnswer((_) async => [inbox, sent, trash, archive]);
+    when(() => repository.moveMessage(any(), any(), any(), any())).thenAnswer((_) async => archivedMessage);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        // Deliberately serves the same message under both Inbox and Sent.
+        // This isolates the specific race under test — folder identity
+        // captured when the swipe starts vs. re-read later after the tab
+        // switch — from the unrelated fact that switching to a folder whose
+        // messagesProvider hasn't been read before goes through a loading
+        // state, which tears down and rebuilds the entire message list
+        // (unmounting every list item's BuildContext, archived-folder bug or
+        // not). Pre-warming Sent below and using an identical, identically
+        // keyed message avoids that unrelated teardown.
+        messagesProvider.overrideWith((ref, folder) async {
+          if (folder.id == inbox.id || folder.id == sent.id) return [message];
+          return const [];
+        }),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    // Pre-warm Sent's messagesProvider and switch back to Inbox, so the
+    // mid-flight switch below resolves instantly (AsyncData already cached)
+    // instead of flashing through AsyncLoading.
+    await tester.tap(find.text('Sent'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Inbox'));
+    await tester.pumpAndSettle();
+
+    // Reveal the start action pane (leftPrimary: archive) with a partial
+    // swipe, then tap its "Archive" button. _MessageList has no key, so the
+    // upcoming tab switch updates widget.folder on this same State rather
+    // than recreating it — this is what makes the bug (and the fix)
+    // observable.
+    await tester.drag(find.text('Hello'), const Offset(300, 0));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Archive'));
+    // A single pump (not pumpAndSettle): _performSwipeAction has started and
+    // is now suspended awaiting archiveCompleter.future, which we haven't
+    // completed yet.
+    await tester.pump();
+
+    // Switch to a different folder tab while that archive call is still in
+    // flight.
+    await tester.tap(find.text('Sent'));
+    await tester.pumpAndSettle();
+
+    // Now let the in-flight archive call resolve.
+    archiveCompleter.complete(archivedMessage);
+    await tester.pumpAndSettle();
+
+    // The snackbar's Undo must move the message back into the folder the
+    // swipe actually started in (Inbox) — not wherever the user has since
+    // navigated to (Sent).
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+
+    verify(() => repository.moveMessage(account, archive, inbox, archivedMessage)).called(1);
+  });
+
+  testWidgets(
+      'a full swipe on a non-removing action (flag) does not dismiss the row '
+      'or leave the tree in a bad state', (tester) async {
+    final repository = MockMailRepository();
+    when(() => repository.markFlagged(any(), any(), any(), any())).thenAnswer((_) async {});
+    const flagOnlyConfig = SwipeActionConfig(
+      leftPrimary: SwipeAction.flag,
+      leftSecondary: SwipeAction.none,
+      rightPrimary: SwipeAction.none,
+      rightSecondary: SwipeAction.none,
+    );
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(flagOnlyConfig)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    // Full swipe past the dismiss threshold — flag is the only configured
+    // (and therefore dismiss) action on this side, but flagging doesn't
+    // remove the message from the folder, so confirmDismiss must veto the
+    // resize/dismiss animation: the row should still be present afterwards,
+    // and flutter_slidable must not throw its "dismissed widget still in
+    // the tree" assertion.
+    await tester.timedDrag(find.text('Hello'), const Offset(700, 0), const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Hello'), findsOneWidget);
+    verify(() => repository.markFlagged(account, inbox, message, true)).called(1);
+  });
+
+  testWidgets(
+      'a failed full-swipe archive does not dismiss the row or leave the '
+      'tree in a bad state', (tester) async {
+    final repository = MockMailRepository();
+    when(() => repository.archiveMessage(any(), any(), any())).thenThrow(Exception('IMAP move failed'));
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    // Full swipe past the dismiss threshold, but the repository call throws.
+    // confirmDismiss must veto the animation on failure too — otherwise the
+    // resize/dismiss already committed before the failure was known, and the
+    // Retry snackbar it shows would point at a row the user can no longer
+    // see or interact with.
+    await tester.timedDrag(find.text('Hello'), const Offset(700, 0), const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('Hello'), findsOneWidget);
+    expect(find.textContaining("Couldn't archive"), findsOneWidget);
   });
 }
