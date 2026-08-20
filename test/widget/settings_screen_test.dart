@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/models/mail_account.dart';
 import 'package:imap_mail/providers/account_providers.dart';
+import 'package:imap_mail/providers/theme_providers.dart';
 import 'package:imap_mail/screens/settings_screen.dart';
 
 void main() {
@@ -24,6 +25,7 @@ void main() {
     await tester.pumpWidget(ProviderScope(
       overrides: [
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        themeModeProvider.overrideWith(() => _FakeThemeModeNotifier(ThemeMode.system)),
       ],
       child: const MaterialApp(home: SettingsScreen()),
     ));
@@ -34,6 +36,28 @@ void main() {
 
     expect(find.text('Remove this account?'), findsOneWidget);
   });
+
+  testWidgets('theme segmented control reflects the current mode and calls setThemeMode on change', (tester) async {
+    final fakeNotifier = _FakeThemeModeNotifier(ThemeMode.dark);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        themeModeProvider.overrideWith(() => fakeNotifier),
+      ],
+      child: const MaterialApp(home: SettingsScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    final segmented = tester.widget<SegmentedButton<ThemeMode>>(
+      find.byType(SegmentedButton<ThemeMode>),
+    );
+    expect(segmented.selected, {ThemeMode.dark});
+
+    await tester.tap(find.text('Light'));
+    await tester.pumpAndSettle();
+
+    expect(fakeNotifier.state, ThemeMode.light);
+  });
 }
 
 class _FakeAccountsNotifier extends AccountsNotifier {
@@ -42,4 +66,17 @@ class _FakeAccountsNotifier extends AccountsNotifier {
 
   @override
   Future<List<MailAccount>> build() async => _accounts;
+}
+
+class _FakeThemeModeNotifier extends ThemeModeNotifier {
+  _FakeThemeModeNotifier(this._initial);
+  final ThemeMode _initial;
+
+  @override
+  ThemeMode build() => _initial;
+
+  @override
+  Future<void> setThemeMode(ThemeMode mode) async {
+    state = mode;
+  }
 }
