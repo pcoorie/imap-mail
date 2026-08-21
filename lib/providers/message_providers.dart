@@ -11,12 +11,12 @@ final messagesProvider = FutureProvider.family<List<MailMessage>, MailFolder>((r
   final account = accounts.firstWhere((a) => a.id == folder.accountId);
   try {
     final messages = await repository.syncHeaders(account, folder);
-    ref.read(lastSyncErrorProvider.notifier).state = null;
+    ref.read(syncErrorProvider(folder.accountId).notifier).state = null;
     return messages;
   } catch (e) {
     final cached = await repository.getCachedMessages(folder.id!);
     if (cached.isEmpty) rethrow;
-    ref.read(lastSyncErrorProvider.notifier).state = e.toString();
+    ref.read(syncErrorProvider(folder.accountId).notifier).state = e.toString();
     return cached;
   }
 });

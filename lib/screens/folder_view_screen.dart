@@ -37,7 +37,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
   @override
   Widget build(BuildContext context) {
     final foldersAsync = ref.watch(foldersProvider(widget.accountId));
-    final syncError = ref.watch(lastSyncErrorProvider);
+    final syncError = ref.watch(syncErrorProvider(widget.accountId));
 
     return Scaffold(
       appBar: AppBar(title: const Text('Mail')),
@@ -71,7 +71,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
                       child: const Text('Retry'),
                     ),
                     TextButton(
-                      onPressed: () => ref.read(lastSyncErrorProvider.notifier).state = null,
+                      onPressed: () => ref.read(syncErrorProvider(widget.accountId).notifier).state = null,
                       child: const Text('Dismiss'),
                     ),
                   ],

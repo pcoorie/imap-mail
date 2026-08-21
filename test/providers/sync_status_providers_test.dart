@@ -59,7 +59,7 @@ void main() {
   });
 
   test(
-      'foldersProvider: a sync failure after a prior success sets lastSyncErrorProvider but still resolves with cached data',
+      'foldersProvider: a sync failure after a prior success sets syncErrorProvider but still resolves with cached data',
       () async {
     final db = await databaseFactory.openDatabase(
       inMemoryDatabasePath,
@@ -95,7 +95,7 @@ void main() {
 
     final first = await container.read(foldersProvider(accountId).future);
     expect(first.map((f) => f.name), contains('INBOX'));
-    expect(container.read(lastSyncErrorProvider), isNull);
+    expect(container.read(syncErrorProvider(accountId)), isNull);
 
     container.invalidate(foldersProvider(accountId));
     final second = await container.read(foldersProvider(accountId).future);
@@ -104,12 +104,12 @@ void main() {
     expect(second, isNotEmpty);
     // ...but the failure must not be silently swallowed now that a cache
     // exists: it has to surface somewhere.
-    expect(container.read(lastSyncErrorProvider), isNotNull);
-    expect(container.read(lastSyncErrorProvider), contains('connection refused'));
+    expect(container.read(syncErrorProvider(accountId)), isNotNull);
+    expect(container.read(syncErrorProvider(accountId)), contains('connection refused'));
   });
 
   test(
-      'messagesProvider: a sync failure after a prior success sets lastSyncErrorProvider but still resolves with cached data',
+      'messagesProvider: a sync failure after a prior success sets syncErrorProvider but still resolves with cached data',
       () async {
     final db = await databaseFactory.openDatabase(
       inMemoryDatabasePath,
@@ -160,13 +160,13 @@ void main() {
 
     final first = await container.read(messagesProvider(folder).future);
     expect(first, isNotEmpty);
-    expect(container.read(lastSyncErrorProvider), isNull);
+    expect(container.read(syncErrorProvider(accountId)), isNull);
 
     container.invalidate(messagesProvider(folder));
     final second = await container.read(messagesProvider(folder).future);
 
     expect(second, isNotEmpty);
-    expect(container.read(lastSyncErrorProvider), isNotNull);
-    expect(container.read(lastSyncErrorProvider), contains('connection refused'));
+    expect(container.read(syncErrorProvider(accountId)), isNotNull);
+    expect(container.read(syncErrorProvider(accountId)), contains('connection refused'));
   });
 }

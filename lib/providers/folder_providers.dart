@@ -10,12 +10,12 @@ final foldersProvider = FutureProvider.family<List<MailFolder>, int>((ref, accou
   final account = accounts.firstWhere((a) => a.id == accountId);
   try {
     final folders = await repository.syncFolders(account);
-    ref.read(lastSyncErrorProvider.notifier).state = null;
+    ref.read(syncErrorProvider(accountId).notifier).state = null;
     return folders;
   } catch (e) {
     final cached = await repository.getCachedFolders(accountId);
     if (cached.isEmpty) rethrow;
-    ref.read(lastSyncErrorProvider.notifier).state = e.toString();
+    ref.read(syncErrorProvider(accountId).notifier).state = e.toString();
     return cached;
   }
 });
