@@ -12,6 +12,7 @@ class MessageListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final failed = message.sendStatus == MailSendStatus.failed;
     return ListTile(
+      tileColor: message.isFlagged ? Colors.orange.withValues(alpha: 0.08) : null,
       leading: failed
           ? const Icon(Icons.error_outline, color: Colors.red)
           : null,
@@ -26,7 +27,14 @@ class MessageListTile extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: Text('${message.date.toLocal().month}/${message.date.toLocal().day}'),
+      trailing: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (message.isFlagged) const Icon(Icons.flag, size: 16, color: Colors.orange),
+          Text('${message.date.toLocal().month}/${message.date.toLocal().day}'),
+        ],
+      ),
       onTap: onTap,
     );
   }

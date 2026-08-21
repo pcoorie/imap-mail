@@ -205,6 +205,44 @@ void main() {
     verify(() => repository.getCachedMessages(4)).called(1);
   });
 
+  testWidgets('the Archived/Undo snackbar disappears on its own after its duration elapses', (tester) async {
+    final repository = MockMailRepository();
+    final archivedMessage = message.copyWith(folderId: 4);
+    var archived = false;
+    when(() => repository.archiveMessage(any(), any(), any())).thenAnswer((_) async {
+      archived = true;
+      return archivedMessage;
+    });
+    when(() => repository.getCachedMessages(any())).thenAnswer((_) async => [archivedMessage]);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith(
+            (ref, folder) async => folder.id == inbox.id && !archived ? [message] : const []),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.timedDrag(find.text('Hello'), const Offset(700, 0), const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(SnackBar, 'Archived'), findsOneWidget);
+
+    // Material's default SnackBar duration is 4 seconds — advance well past
+    // it and confirm nothing is left relying only on flutter_slidable's/
+    // Material's own dismiss timer (see _showAutoDismissingSnackBar).
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(SnackBar, 'Archived'), findsNothing);
+    expect(find.text('Undo'), findsNothing);
+  });
+
   testWidgets('tapping the secondary right-side action (Mark read/unread) calls markRead', (tester) async {
     final repository = MockMailRepository();
     when(() => repository.markRead(any(), any(), any(), any())).thenAnswer((_) async {});

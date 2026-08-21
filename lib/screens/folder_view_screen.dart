@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
@@ -145,7 +147,40 @@ class _MessageListState extends ConsumerState<_MessageList> {
   // regardless of how long the underlying refresh takes.
   final Set<int> _pendingRemoval = {};
 
+  // See _showAutoDismissingSnackBar's doc comment for why this exists.
+  // Owned by this State (not fire-and-forget) so it never fires after —
+  // or leaks past — this widget's own lifetime: cancelled and replaced
+  // whenever a new snackbar supersedes an old one, and cancelled in
+  // dispose() so the widget test framework's "no pending timers" check
+  // doesn't trip on a snackbar shown just before a test ends.
+  Timer? _snackBarDismissTimer;
+
   MailFolder get folder => widget.folder;
+
+  @override
+  void dispose() {
+    _snackBarDismissTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Shows [snackBar] via [messenger] and guarantees it disappears after
+  /// [snackBar]'s own `duration` (Material's default is 4 seconds), even if
+  /// its built-in auto-dismiss timer doesn't fire — observed happening in
+  /// this screen (confirmed via `ScaffoldFeatureController.closed` never
+  /// completing, well past the expected duration, with no custom
+  /// SnackBarTheme or timeDilation override anywhere in the app) but not
+  /// root-caused. Also clears any snackbar already showing/queued first, so
+  /// a new action's feedback is never stuck waiting behind a stale one.
+  void _showAutoDismissingSnackBar(ScaffoldMessengerState messenger, SnackBar snackBar) {
+    _snackBarDismissTimer?.cancel();
+    messenger.clearSnackBars();
+    messenger.showSnackBar(snackBar);
+    _snackBarDismissTimer = Timer(snackBar.duration, () {
+      if (messenger.mounted) {
+        messenger.hideCurrentSnackBar();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -365,13 +400,16 @@ class _MessageListState extends ConsumerState<_MessageList> {
       // to a list item that has since been unmounted, but the failure still
       // deserves feedback.
       if (messenger != null && messenger.mounted) {
-        messenger.showSnackBar(SnackBar(
-          content: Text("Couldn't ${action.label.toLowerCase()} — $e"),
-          action: SnackBarAction(
-            label: 'Retry',
-            onPressed: () => _performSwipeAction(ref, folder, action, message),
+        _showAutoDismissingSnackBar(
+          messenger,
+          SnackBar(
+            content: Text("Couldn't ${action.label.toLowerCase()} — $e"),
+            action: SnackBarAction(
+              label: 'Retry',
+              onPressed: () => _performSwipeAction(ref, folder, action, message),
+            ),
           ),
-        ));
+        );
       }
       return false;
     }
@@ -396,41 +434,45 @@ class _MessageListState extends ConsumerState<_MessageList> {
     // fail.
     final canUndo = movedMessage.uid >= 0;
 
-    messenger.showSnackBar(SnackBar(
-      content: Text(canUndo ? verb : "$verb — can't be undone"),
-      action: canUndo
-          ? SnackBarAction(
-              label: 'Undo',
-              onPressed: () async {
-                // Everything here can fail (offline, the message's folder no
-                // longer cached, this list disposed while the snackbar was
-                // still up). Unhandled, the user taps Undo and sees nothing
-                // happen at all; the repository already reverts its own
-                // local state, so this is purely about feedback.
-                try {
-                  if (!mounted) {
-                    throw StateError('the message list is no longer open');
-                  }
-                  final repository = await ref.read(mailRepositoryProvider.future);
-                  final folders = await repository.getCachedFolders(originalFolder.accountId);
-                  final currentFolder = folders.firstWhere(
-                    (f) => f.id == movedMessage.folderId,
-                    orElse: () => throw StateError(
-                        'the folder it was moved to is no longer available'),
-                  );
-                  await repository.moveMessage(account, currentFolder, originalFolder, movedMessage);
-                  if (!mounted) return;
-                  ref.invalidate(messagesProvider(originalFolder));
-                } catch (e) {
-                  if (messenger.mounted) {
-                    messenger.showSnackBar(
-                      SnackBar(content: Text("Couldn't undo — $e")),
+    _showAutoDismissingSnackBar(
+      messenger,
+      SnackBar(
+        content: Text(canUndo ? verb : "$verb — can't be undone"),
+        action: canUndo
+            ? SnackBarAction(
+                label: 'Undo',
+                onPressed: () async {
+                  // Everything here can fail (offline, the message's folder no
+                  // longer cached, this list disposed while the snackbar was
+                  // still up). Unhandled, the user taps Undo and sees nothing
+                  // happen at all; the repository already reverts its own
+                  // local state, so this is purely about feedback.
+                  try {
+                    if (!mounted) {
+                      throw StateError('the message list is no longer open');
+                    }
+                    final repository = await ref.read(mailRepositoryProvider.future);
+                    final folders = await repository.getCachedFolders(originalFolder.accountId);
+                    final currentFolder = folders.firstWhere(
+                      (f) => f.id == movedMessage.folderId,
+                      orElse: () => throw StateError(
+                          'the folder it was moved to is no longer available'),
                     );
+                    await repository.moveMessage(account, currentFolder, originalFolder, movedMessage);
+                    if (!mounted) return;
+                    ref.invalidate(messagesProvider(originalFolder));
+                  } catch (e) {
+                    if (messenger.mounted) {
+                      _showAutoDismissingSnackBar(
+                        messenger,
+                        SnackBar(content: Text("Couldn't undo — $e")),
+                      );
+                    }
                   }
-                }
-              },
-            )
-          : null,
-    ));
+                },
+              )
+            : null,
+      ),
+    );
   }
 }
