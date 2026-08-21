@@ -10,7 +10,8 @@ class ImapMailApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return MaterialApp(
-      title: 'IMAP Mail',
+      title: 'Cobalt Mail',
+      debugShowCheckedModeBanner: false,
       home: Consumer(
         builder: (context, ref, _) {
           final accountsAsync = ref.watch(accountsProvider);

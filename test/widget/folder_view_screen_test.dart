@@ -56,6 +56,36 @@ void main() {
     expect(find.text('Archive'), findsOneWidget);
   });
 
+  testWidgets(
+      'expanding many other folders does not overflow the Column or starve '
+      'the message list of space', (tester) async {
+    final otherFolders = List.generate(
+      15,
+      (i) => MailFolder(
+          id: 10 + i, accountId: accountId, name: 'Custom Folder $i',
+          path: 'Custom$i', type: MailFolderType.other),
+    );
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, ...otherFolders]),
+        messagesProvider.overrideWith((ref, folder) async => const []),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('More folders'));
+    await tester.pumpAndSettle();
+
+    // Expanding the folder tree must not blow the RenderFlex layout...
+    expect(tester.takeException(), isNull);
+    // ...and the message list beneath it must still be given real space to
+    // render in, not squeezed to zero height by the overflowing sibling.
+    final listViewBox = tester.renderObject<RenderBox>(find.byType(ListView).last);
+    expect(listViewBox.size.height, greaterThan(0));
+  });
+
   testWidgets('shows an error banner with Retry when folders fail to load', (tester) async {
     await tester.pumpWidget(ProviderScope(
       overrides: [

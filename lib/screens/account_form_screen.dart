@@ -129,9 +129,16 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
           newPassword: _password.text.isEmpty ? null : _password.text,
         );
       }
-      if (mounted) Navigator.of(context).pop();
+      // When this screen is the app's root (onboarding with zero accounts),
+      // there's no previous route to pop back to — popping the only route
+      // would empty the Navigator's Overlay and leave a black screen.
+      // In that case, just let the accountsProvider watcher in app.dart
+      // swap to AccountListScreen once the new account count is picked up.
+      if (mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
     } catch (e) {
-      setState(() => _testResult = 'Could not save: $e');
+      if (mounted) setState(() => _testResult = 'Could not save: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
