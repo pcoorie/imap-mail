@@ -5,6 +5,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:imap_mail/data/local/account_dao.dart';
 import 'package:imap_mail/data/local/app_database.dart';
 import 'package:imap_mail/data/local/folder_dao.dart';
+import 'package:imap_mail/data/repository/mail_repository.dart';
 import 'package:imap_mail/data/secure/credential_store.dart';
 import 'package:imap_mail/data/transport/mail_transport.dart';
 import 'package:imap_mail/models/enums.dart';
@@ -20,6 +21,8 @@ import 'package:imap_mail/providers/sync_status_providers.dart';
 import 'package:imap_mail/providers/unified_inbox_providers.dart';
 
 class MockMailTransport extends Mock implements MailTransport {}
+
+class MockMailRepository extends Mock implements MailRepository {}
 
 class _FakeCredentialStore implements SecureCredentialStore {
   @override
@@ -102,10 +105,15 @@ void main() {
   });
 
   test('totalUnreadCountProvider sums unread counts across accounts\' Inbox folders only', () async {
+    final repository = MockMailRepository();
+    when(() => repository.getCachedFolders(1)).thenAnswer((_) async => [workInbox, workSent]);
+    when(() => repository.getCachedFolders(2)).thenAnswer((_) async => [personalInbox]);
     final container = ProviderContainer(overrides: [
       accountsProvider.overrideWith(() => _FakeAccountsNotifier([workAccount, personalAccount])),
-      foldersProvider.overrideWith((ref, accountId) async =>
-          accountId == 1 ? [workInbox, workSent] : [personalInbox]),
+      // totalUnreadCountProvider reads unread counts straight from the
+      // repository (a plain local DB read) rather than through
+      // foldersProvider's cache — see unified_inbox_providers.dart for why.
+      mailRepositoryProvider.overrideWith((ref) async => repository),
     ]);
     addTearDown(container.dispose);
 
@@ -113,12 +121,12 @@ void main() {
   });
 
   test('totalUnreadCountProvider treats a failed account as contributing zero, not throwing', () async {
+    final repository = MockMailRepository();
+    when(() => repository.getCachedFolders(1)).thenThrow(Exception('offline'));
+    when(() => repository.getCachedFolders(2)).thenAnswer((_) async => [personalInbox]);
     final container = ProviderContainer(overrides: [
       accountsProvider.overrideWith(() => _FakeAccountsNotifier([workAccount, personalAccount])),
-      foldersProvider.overrideWith((ref, accountId) async {
-        if (accountId == 1) throw Exception('offline');
-        return [personalInbox];
-      }),
+      mailRepositoryProvider.overrideWith((ref) async => repository),
     ]);
     addTearDown(container.dispose);
 
@@ -181,6 +189,14 @@ void main() {
       ]);
       addTearDown(container.dispose);
 
+      // Before any message sync, the folder's real (freshly-inserted)
+      // unread_count is 0 — this is the exact state a live app is in for
+      // the whole gap between "folders synced" and "this folder's messages
+      // synced". If totalUnreadCountProvider read a stale value here,
+      // returning 0 wouldn't distinguish "correctly stale" from "correctly
+      // zero", so this is a baseline, not the regression check itself.
+      expect(await container.read(totalUnreadCountProvider.future), 0);
+
       // Drives a real syncHeaders call, which recomputes and persists the
       // folder's true unread count (2 of 3 messages unread) via
       // MessageDao.countUnread + FolderDao.updateUnreadCount — exactly the
@@ -188,11 +204,15 @@ void main() {
       final folder = MailFolder(id: folderId, accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox);
       await container.read(messagesProvider(folder).future);
 
-      // A subsequent foldersProvider refresh (the real trigger for
-      // totalUnreadCountProvider re-reading folder rows) must not clobber
-      // the count back to 0 — this is what FolderDao.upsert's preservation
-      // of unread_count guards against.
-      container.invalidate(foldersProvider(accountId));
+      // THE REGRESSION CHECK: no manual container.invalidate(...) of
+      // anything here — this reproduces the live bug a user hit (app icon
+      // badge frozen at 0 despite 3 real unread messages) and proves the
+      // fix. In production, nothing ever invalidates foldersProvider after
+      // a message sync outside of error-retry paths, so
+      // totalUnreadCountProvider must NOT depend on foldersProvider's
+      // cached snapshot to see this — it has to react on its own via
+      // unreadCountRefreshTickProvider, which messagesProvider bumps right
+      // after the syncHeaders call above.
 
       expect(await container.read(totalUnreadCountProvider.future), 2);
     });

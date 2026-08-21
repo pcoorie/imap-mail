@@ -1,10 +1,12 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:imap_mail/data/repository/mail_repository.dart';
 import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/models/mail_account.dart';
 import 'package:imap_mail/providers/account_providers.dart';
 import 'package:imap_mail/providers/badge_providers.dart';
-import 'package:imap_mail/providers/folder_providers.dart';
+import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/providers/unified_inbox_providers.dart';
 import 'package:imap_mail/services/app_icon_badge.dart';
 import 'package:imap_mail/models/mail_folder.dart';
@@ -22,6 +24,8 @@ class _FakeAppIconBadge implements AppIconBadge {
   Future<void> setCount(int count) async => calls.add(count);
 }
 
+class MockMailRepository extends Mock implements MailRepository {}
+
 void main() {
   const account = MailAccount(
     id: 1, displayName: 'Work', email: 'work@example.com',
@@ -33,9 +37,14 @@ void main() {
 
   test('listening to totalUnreadCountProvider pushes its value to AppIconBadge', () async {
     final fakeBadge = _FakeAppIconBadge();
+    final repository = MockMailRepository();
+    when(() => repository.getCachedFolders(1)).thenAnswer((_) async => [inbox]);
     final container = ProviderContainer(overrides: [
       accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
-      foldersProvider.overrideWith((ref, accountId) async => [inbox]),
+      // totalUnreadCountProvider reads unread counts straight from the
+      // repository (a plain local DB read) rather than through
+      // foldersProvider's cache — see unified_inbox_providers.dart for why.
+      mailRepositoryProvider.overrideWith((ref) async => repository),
       appIconBadgeProvider.overrideWithValue(fakeBadge),
     ]);
     addTearDown(container.dispose);
@@ -56,9 +65,11 @@ void main() {
   test('reaching zero unread sends setCount(0), clearing a stale badge', () async {
     final fakeBadge = _FakeAppIconBadge();
     final zeroInbox = inbox.copyWith(unreadCount: 0);
+    final repository = MockMailRepository();
+    when(() => repository.getCachedFolders(1)).thenAnswer((_) async => [zeroInbox]);
     final container = ProviderContainer(overrides: [
       accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
-      foldersProvider.overrideWith((ref, accountId) async => [zeroInbox]),
+      mailRepositoryProvider.overrideWith((ref) async => repository),
       appIconBadgeProvider.overrideWithValue(fakeBadge),
     ]);
     addTearDown(container.dispose);

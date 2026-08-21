@@ -12,6 +12,10 @@ final messagesProvider = FutureProvider.family<List<MailMessage>, MailFolder>((r
   try {
     final messages = await repository.syncHeaders(account, folder);
     ref.read(syncErrorProvider(folder.accountId).notifier).state = null;
+    // syncHeaders recomputes and persists this folder's true unread count
+    // (see MailRepository); bump the tick so totalUnreadCountProvider
+    // re-reads it instead of serving a now-stale cached sum.
+    ref.read(unreadCountRefreshTickProvider.notifier).state++;
     return messages;
   } catch (e) {
     final cached = await repository.getCachedMessages(folder.id!);

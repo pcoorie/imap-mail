@@ -9,6 +9,7 @@ import '../models/mail_message.dart';
 import '../models/swipe_action.dart';
 import '../providers/message_providers.dart';
 import '../providers/repository_providers.dart';
+import '../providers/sync_status_providers.dart';
 
 IconData swipeActionIcon(SwipeAction action) => switch (action) {
       SwipeAction.archive => Icons.archive_outlined,
@@ -171,6 +172,7 @@ class MessageSwipeController {
           final moved = await repository.archiveMessage(account, folder, message);
           if (!isMounted()) return false;
           ref.invalidate(messagesProvider(folder));
+          ref.read(unreadCountRefreshTickProvider.notifier).state++;
           // Re-fetch from the DAO rather than trusting `moved`'s uid
           // directly: when the server doesn't report a new UID on move (no
           // UIDPLUS), `moved` still carries the pre-move uid even though the
@@ -186,6 +188,7 @@ class MessageSwipeController {
           final result = await repository.deleteMessage(account, folder, message);
           if (!isMounted()) return false;
           ref.invalidate(messagesProvider(folder));
+          ref.read(unreadCountRefreshTickProvider.notifier).state++;
           // Only offer Undo when the message actually moved (a permanent
           // removal — no Trash folder, or already in Trash — can't be
           // undone). Either way it left `folder`, so this branch always
@@ -210,10 +213,12 @@ class MessageSwipeController {
       }
       if (!isMounted()) return false;
       ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
       return false;
     } catch (e) {
       if (isMounted()) {
         ref.invalidate(messagesProvider(folder));
+        ref.read(unreadCountRefreshTickProvider.notifier).state++;
       }
       // Use the messenger captured before the awaits: `context` may belong
       // to a list item that has since been unmounted, but the failure still
@@ -273,6 +278,7 @@ class MessageSwipeController {
                     await repository.moveMessage(account, currentFolder, originalFolder, movedMessage);
                     if (!isMounted()) return;
                     ref.invalidate(messagesProvider(originalFolder));
+                    ref.read(unreadCountRefreshTickProvider.notifier).state++;
                   } catch (e) {
                     if (messenger.mounted) {
                       _showAutoDismissingSnackBar(messenger, SnackBar(content: Text("Couldn't undo — $e")));
