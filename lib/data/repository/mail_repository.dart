@@ -37,6 +37,18 @@ class MailRepository {
     return password;
   }
 
+  /// Recomputes [folderId]'s unread count from the messages actually
+  /// present locally and persists it. The transport layer never populates
+  /// `MailFolder.unreadCount` (no extra IMAP round trip for it — see the
+  /// design spec's "no extra sync" property for `totalUnreadCountProvider`),
+  /// so this is the only place that count is ever kept truthful: called
+  /// after anything that changes what "unread" means for a folder (new
+  /// headers arriving, a read/unread flip, or a message moving in/out).
+  Future<void> _refreshUnreadCount(int folderId) async {
+    final unread = await _messageDao.countUnread(folderId);
+    await _folderDao.updateUnreadCount(folderId, unread);
+  }
+
   Future<int> ensureOutboxFolder(int accountId) async {
     return _folderDao.upsert(MailFolder(
       accountId: accountId,
@@ -86,6 +98,13 @@ class MailRepository {
         await _folderDao.updateLastSyncedUid(folder.id!, maxFetchedUid);
       }
     }
+    // Recomputed unconditionally, not only when newHeaders is non-empty:
+    // an is_read change made server-side (or by markRead, whose own
+    // optimistic write already recomputes) can otherwise leave a stale
+    // count sitting in the folder row indefinitely whenever a sync finds no
+    // new mail. A local COUNT(*) query is not the "extra sync" the design
+    // spec rules out — that refers to IMAP round trips, not local DB reads.
+    await _refreshUnreadCount(folder.id!);
     return _messageDao.getForFolder(folder.id!);
   }
 
@@ -140,6 +159,11 @@ class MailRepository {
     MailMessage message,
   ) async {
     await _messageDao.moveToFolder(message.id!, to.id!);
+    // A message leaving `from` and landing in `to` changes both folders'
+    // true unread counts (if it was unread) — recompute both, not just the
+    // one this call happens to be "about".
+    await _refreshUnreadCount(from.id!);
+    await _refreshUnreadCount(to.id!);
     try {
       final password = await _passwordFor(account);
       final newUid = await _transport.moveMessage(account, password, from, message, to);
@@ -156,6 +180,8 @@ class MailRepository {
       // failed move — i.e. exactly the offline/server-error case this
       // revert exists for.
       await _messageDao.moveToFolder(message.id!, from.id!, newUid: message.uid);
+      await _refreshUnreadCount(from.id!);
+      await _refreshUnreadCount(to.id!);
       rethrow;
     }
   }
@@ -202,6 +228,7 @@ class MailRepository {
   }) async {
     final previous = message.isRead;
     await _messageDao.updateReadStatus(message.id!, isRead);
+    await _refreshUnreadCount(folder.id!);
     // Local-only/placeholder-uid rows have nothing addressable on the
     // server; the local write above is the whole operation.
     if (!_hasServerUid(message)) return;
@@ -211,6 +238,9 @@ class MailRepository {
     } catch (_) {
       if (revertLocalOnFailure) {
         await _messageDao.updateReadStatus(message.id!, previous);
+        // The persisted unread_count must always match whatever is_read
+        // state actually ended up persisted — including a reverted one.
+        await _refreshUnreadCount(folder.id!);
       }
       rethrow;
     }
@@ -325,6 +355,10 @@ class MailRepository {
       return moveMessage(account, currentFolder, trashFolder, message);
     }
     await _messageDao.deleteMessage(message.id!);
+    // Permanently removing a message changes currentFolder's true unread
+    // count too (the moveMessage branch above already handles this for the
+    // move-to-Trash case via its own recompute of both folders).
+    await _refreshUnreadCount(currentFolder.id!);
     return message;
   }
 

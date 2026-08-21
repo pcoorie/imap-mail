@@ -1,14 +1,34 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:imap_mail/data/local/account_dao.dart';
+import 'package:imap_mail/data/local/app_database.dart';
+import 'package:imap_mail/data/local/folder_dao.dart';
+import 'package:imap_mail/data/secure/credential_store.dart';
+import 'package:imap_mail/data/transport/mail_transport.dart';
 import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/models/mail_account.dart';
 import 'package:imap_mail/models/mail_folder.dart';
 import 'package:imap_mail/models/mail_message.dart';
 import 'package:imap_mail/providers/account_providers.dart';
+import 'package:imap_mail/providers/database_providers.dart';
 import 'package:imap_mail/providers/folder_providers.dart';
 import 'package:imap_mail/providers/message_providers.dart';
+import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/providers/sync_status_providers.dart';
 import 'package:imap_mail/providers/unified_inbox_providers.dart';
+
+class MockMailTransport extends Mock implements MailTransport {}
+
+class _FakeCredentialStore implements SecureCredentialStore {
+  @override
+  Future<void> savePassword({required int accountId, required String password}) async {}
+  @override
+  Future<String?> getPassword(int accountId) async => 'app-password';
+  @override
+  Future<void> deletePassword(int accountId) async {}
+}
 
 class _FakeAccountsNotifier extends AccountsNotifier {
   _FakeAccountsNotifier(this._accounts);
@@ -103,5 +123,78 @@ void main() {
     addTearDown(container.dispose);
 
     expect(await container.read(totalUnreadCountProvider.future), 5);
+  });
+
+  group('totalUnreadCountProvider through the real DAO/repository path (regression coverage for the '
+      'always-0 badge bug — no test previously drove this provider through real persisted data)', () {
+    setUpAll(() {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+      registerFallbackValue(workAccount);
+      registerFallbackValue(const MailFolder(accountId: 1, name: '', path: '', type: MailFolderType.inbox));
+    });
+
+    test(
+        'sums a real unread count recomputed by MailRepository.syncHeaders and persisted via FolderDao — '
+        'not an overridden foldersProvider fixture', () async {
+      final db = await databaseFactory.openDatabase(
+        inMemoryDatabasePath,
+        options: OpenDatabaseOptions(
+          version: 1,
+          onCreate: AppDatabase.onCreate,
+          onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+          singleInstance: false,
+        ),
+      );
+      addTearDown(() => db.close());
+
+      final accountId = await AccountDao(db).insert(workAccount);
+      final account = workAccount.copyWith(id: accountId);
+      final folderId = await FolderDao(db).upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+
+      final transport = MockMailTransport();
+      when(() => transport.discoverFolders(any(), any(), any())).thenAnswer((_) async => [
+            MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+          ]);
+      when(() => transport.fetchHeadersSince(any(), any(), any(), any())).thenAnswer((_) async => [
+            MailMessage(
+              folderId: folderId, uid: 1, subject: 'Unread one', from: 'a@example.com',
+              to: 'me@example.com', date: DateTime.utc(2026, 8, 19), snippet: 'snippet',
+            ),
+            MailMessage(
+              folderId: folderId, uid: 2, subject: 'Already read', from: 'a@example.com',
+              to: 'me@example.com', date: DateTime.utc(2026, 8, 19), snippet: 'snippet', isRead: true,
+            ),
+            MailMessage(
+              folderId: folderId, uid: 3, subject: 'Unread two', from: 'a@example.com',
+              to: 'me@example.com', date: DateTime.utc(2026, 8, 19), snippet: 'snippet',
+            ),
+          ]);
+
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWith((ref) async => db),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        mailTransportProvider.overrideWithValue(transport),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
+      ]);
+      addTearDown(container.dispose);
+
+      // Drives a real syncHeaders call, which recomputes and persists the
+      // folder's true unread count (2 of 3 messages unread) via
+      // MessageDao.countUnread + FolderDao.updateUnreadCount — exactly the
+      // path production code takes, not a hand-built MailFolder(unreadCount: N).
+      final folder = MailFolder(id: folderId, accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox);
+      await container.read(messagesProvider(folder).future);
+
+      // A subsequent foldersProvider refresh (the real trigger for
+      // totalUnreadCountProvider re-reading folder rows) must not clobber
+      // the count back to 0 — this is what FolderDao.upsert's preservation
+      // of unread_count guards against.
+      container.invalidate(foldersProvider(accountId));
+
+      expect(await container.read(totalUnreadCountProvider.future), 2);
+    });
   });
 }

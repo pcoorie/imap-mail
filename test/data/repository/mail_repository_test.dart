@@ -950,4 +950,173 @@ void main() {
     expect(refreshed.uid, 9, reason: 'uid must be restored as-is, never re-synthesized');
     expect(await messageDao.getForFolder(archiveFolderId), isEmpty);
   });
+
+  group('folder unread_count recomputation (regression coverage for the always-0 badge bug)', () {
+    test(
+        'syncHeaders persists the folder\'s real unread count, computed from the local messages table '
+        '(not a value threaded through from IMAP, which this app never fetches)', () async {
+      final folderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+      final folder = (await folderDao.getById(folderId))!;
+      when(() => transport.fetchHeadersSince(any(), any(), any(), 0)).thenAnswer((_) async => [
+            MailMessage(
+              folderId: folderId,
+              uid: 1,
+              subject: 'Unread one',
+              from: 'a@example.com',
+              to: 'me@example.com',
+              date: DateTime.utc(2026, 8, 19),
+              snippet: 'snippet',
+            ),
+            MailMessage(
+              folderId: folderId,
+              uid: 2,
+              subject: 'Already read',
+              from: 'a@example.com',
+              to: 'me@example.com',
+              date: DateTime.utc(2026, 8, 19),
+              snippet: 'snippet',
+              isRead: true,
+            ),
+            MailMessage(
+              folderId: folderId,
+              uid: 3,
+              subject: 'Unread two',
+              from: 'a@example.com',
+              to: 'me@example.com',
+              date: DateTime.utc(2026, 8, 19),
+              snippet: 'snippet',
+            ),
+          ]);
+
+      await repository.syncHeaders(account.copyWith(id: accountId), folder);
+
+      final persisted = await folderDao.getById(folderId);
+      expect(persisted!.unreadCount, 2);
+    });
+
+    test(
+        'syncHeaders keeps the persisted unread count truthful even when a sync finds no new headers '
+        '(recomputes unconditionally, not only when new mail arrives)', () async {
+      final folderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+      var folder = (await folderDao.getById(folderId))!;
+      when(() => transport.fetchHeadersSince(any(), any(), any(), 0)).thenAnswer((_) async => [
+            MailMessage(
+              folderId: folderId,
+              uid: 1,
+              subject: 'Unread',
+              from: 'a@example.com',
+              to: 'me@example.com',
+              date: DateTime.utc(2026, 8, 19),
+              snippet: 'snippet',
+            ),
+          ]);
+      await repository.syncHeaders(account.copyWith(id: accountId), folder);
+      folder = (await folderDao.getById(folderId))!;
+      expect(folder.unreadCount, 1);
+
+      // Simulate a foldersProvider refresh in between (the real trigger:
+      // FolderDao.upsert no longer resets unread_count on a re-sync — see
+      // the FolderDao test covering this directly).
+      await folderDao.upsert(folder);
+
+      when(() => transport.fetchHeadersSince(any(), any(), any(), 1)).thenAnswer((_) async => []);
+      await repository.syncHeaders(account.copyWith(id: accountId), folder);
+
+      expect((await folderDao.getById(folderId))!.unreadCount, 1);
+    });
+
+    test('markRead updates the persisted folder unread count on success', () async {
+      final folderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+      final folder = (await folderDao.getById(folderId))!;
+      await messageDao.upsertHeaders([
+        MailMessage(
+          folderId: folderId, uid: 1, subject: 'Subject', from: 'a@example.com',
+          to: 'me@example.com', date: DateTime.utc(2026, 8, 19), snippet: 'snippet',
+        ),
+      ]);
+      await folderDao.updateUnreadCount(folderId, 1);
+      final message = (await messageDao.getForFolder(folderId)).first;
+      when(() => transport.setSeen(any(), any(), any(), any(), any())).thenAnswer((_) async {});
+
+      await repository.markRead(account.copyWith(id: accountId), folder, message, true);
+
+      expect((await folderDao.getById(folderId))!.unreadCount, 0);
+    });
+
+    test('markRead updates the persisted folder unread count on the revert-on-failure path too', () async {
+      final folderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+      final folder = (await folderDao.getById(folderId))!;
+      await messageDao.upsertHeaders([
+        MailMessage(
+          folderId: folderId, uid: 1, subject: 'Subject', from: 'a@example.com',
+          to: 'me@example.com', date: DateTime.utc(2026, 8, 19), snippet: 'snippet',
+        ),
+      ]);
+      await folderDao.updateUnreadCount(folderId, 1);
+      final message = (await messageDao.getForFolder(folderId)).first;
+      when(() => transport.setSeen(any(), any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+      await expectLater(
+        repository.markRead(account.copyWith(id: accountId), folder, message, true),
+        throwsException,
+      );
+
+      // The optimistic write set it to 0, then the revert on failure put the
+      // message back to unread — the persisted count must track that revert
+      // too, not freeze at the optimistic (now-wrong) value.
+      expect((await messageDao.getById(message.id!))!.isRead, isFalse);
+      expect((await folderDao.getById(folderId))!.unreadCount, 1);
+    });
+
+    test('archiveMessage updates the unread counts of both the source and destination folders', () async {
+      final inboxFolderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+      final archiveFolderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'Archive', path: 'Archive', type: MailFolderType.archive),
+      );
+      final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+      await messageDao.upsertHeaders([
+        MailMessage(
+          folderId: inboxFolderId, uid: 5, subject: 'Subject', from: 'a@example.com',
+          to: 'me@example.com', date: DateTime.utc(2026, 8, 19), snippet: 'snippet',
+        ),
+      ]);
+      await folderDao.updateUnreadCount(inboxFolderId, 1);
+      final message = (await messageDao.getForFolder(inboxFolderId)).first;
+      when(() => transport.moveMessage(any(), any(), any(), any(), any())).thenAnswer((_) async => 42);
+
+      await repository.archiveMessage(account.copyWith(id: accountId), inboxFolder, message);
+
+      expect((await folderDao.getById(inboxFolderId))!.unreadCount, 0);
+      expect((await folderDao.getById(archiveFolderId))!.unreadCount, 1);
+    });
+
+    test('deleteMessage (permanent removal, no Trash folder) updates the folder\'s unread count', () async {
+      final inboxFolderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+      );
+      final inboxFolder = (await folderDao.getById(inboxFolderId))!;
+      await messageDao.upsertHeaders([
+        MailMessage(
+          folderId: inboxFolderId, uid: 1, subject: 'Subject', from: 'a@example.com',
+          to: 'me@example.com', date: DateTime.utc(2026, 8, 19), snippet: 'snippet',
+        ),
+      ]);
+      await folderDao.updateUnreadCount(inboxFolderId, 1);
+      final message = (await messageDao.getForFolder(inboxFolderId)).first;
+
+      await repository.deleteMessage(account.copyWith(id: accountId), inboxFolder, message);
+
+      expect((await folderDao.getById(inboxFolderId))!.unreadCount, 0);
+    });
+  });
 }

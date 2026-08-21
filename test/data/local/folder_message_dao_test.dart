@@ -55,11 +55,34 @@ void main() {
         type: MailFolderType.inbox,
       );
       final id1 = await folderDao.upsert(folder);
-      final id2 = await folderDao.upsert(folder.copyWith(unreadCount: 3));
+      final id2 = await folderDao.upsert(folder.copyWith(name: 'Inbox (renamed)'));
 
       expect(id2, id1);
       final fetched = await folderDao.getById(id1);
-      expect(fetched!.unreadCount, 3);
+      expect(fetched!.name, 'Inbox (renamed)');
+    });
+
+    test(
+        'upsert never regresses a previously-persisted unread_count back to the transport\'s default of 0 '
+        '(the transport layer never populates MailFolder.unreadCount, so re-syncing folder metadata must not '
+        'clobber a count MailRepository has already recomputed locally — same preservation MailFolder.lastSyncedUid '
+        'already gets)', () async {
+      final folder = MailFolder(
+        accountId: accountId,
+        name: 'INBOX',
+        path: 'INBOX',
+        type: MailFolderType.inbox,
+      );
+      final id = await folderDao.upsert(folder);
+      await folderDao.updateUnreadCount(id, 4);
+
+      // Re-discovering the same folder from the transport again — this
+      // MailFolder carries the default unreadCount: 0, exactly like every
+      // MailFolder EnoughMailTransport.discoverFolders ever constructs.
+      await folderDao.upsert(folder);
+
+      final fetched = await folderDao.getById(id);
+      expect(fetched!.unreadCount, 4);
     });
 
     test('getForAccount returns only that account\'s folders', () async {
@@ -234,6 +257,41 @@ void main() {
       await messageDao.updateFlagStatus(message.id!, true);
 
       expect((await messageDao.getById(message.id!))!.isFlagged, isTrue);
+    });
+
+    test('countUnread counts only is_read = 0 rows in the given folder', () async {
+      await messageDao.upsertHeaders([
+        sampleMessage(1),
+        sampleMessage(2).copyWith(isRead: true),
+        sampleMessage(3),
+      ]);
+
+      expect(await messageDao.countUnread(folderId), 2);
+    });
+
+    test('countUnread is scoped to the folder — does not count unread rows in other folders', () async {
+      final otherFolderId = await folderDao.upsert(
+        MailFolder(accountId: accountId, name: 'Other', path: 'Other', type: MailFolderType.other),
+      );
+      await messageDao.upsertHeaders([sampleMessage(1)]);
+      await messageDao.upsertHeaders([
+        MailMessage(
+          folderId: otherFolderId,
+          uid: 1,
+          subject: 'Elsewhere',
+          from: 'a@example.com',
+          to: 'me@example.com',
+          date: DateTime.utc(2026, 8, 19),
+          snippet: 'snippet',
+        ),
+      ]);
+
+      expect(await messageDao.countUnread(folderId), 1);
+      expect(await messageDao.countUnread(otherFolderId), 1);
+    });
+
+    test('countUnread returns 0 for an empty folder', () async {
+      expect(await messageDao.countUnread(folderId), 0);
     });
 
     test('moveToFolder uses the given newUid instead of synthesizing one when provided', () async {

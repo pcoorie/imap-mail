@@ -161,4 +161,19 @@ class MessageDao {
     final value = rows.first['max_uid'];
     return value == null ? 0 : value as int;
   }
+
+  /// Counts messages in [folderId] with `is_read = 0`. Used by
+  /// [MailRepository] to recompute a folder's real unread count from the
+  /// local cache whenever a sync or a read/unread change could have altered
+  /// it, rather than trusting a value threaded through from IMAP (which this
+  /// app's transport layer never populates — see the design spec's "no
+  /// extra sync" property for `totalUnreadCountProvider`).
+  Future<int> countUnread(int folderId) async {
+    final rows = await _db.rawQuery(
+      'SELECT COUNT(*) as count FROM messages WHERE folder_id = ? AND is_read = 0',
+      [folderId],
+    );
+    final value = rows.first['count'];
+    return value == null ? 0 : value as int;
+  }
 }
