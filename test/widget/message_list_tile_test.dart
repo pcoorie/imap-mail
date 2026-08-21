@@ -98,4 +98,50 @@ void main() {
     final tile = tester.widget<ListTile>(find.byType(ListTile));
     expect(tile.tileColor, isNull);
   });
+
+  testWidgets('shows a colored dot in the leading slot when accountColor is set', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.none),
+          onTap: () {},
+          accountColor: Colors.teal,
+        ),
+      ),
+    ));
+
+    final tile = tester.widget<ListTile>(find.byType(ListTile));
+    expect(tile.leading, isNotNull);
+    final container = tester.widget<Container>(find.byKey(const Key('accountColorDot')));
+    expect((container.decoration as BoxDecoration).color, Colors.teal);
+  });
+
+  testWidgets('shows no leading widget when accountColor is null and the message did not fail to send', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.none),
+          onTap: () {},
+        ),
+      ),
+    ));
+
+    final tile = tester.widget<ListTile>(find.byType(ListTile));
+    expect(tile.leading, isNull);
+  });
+
+  testWidgets('a failed-send message shows the error icon even when accountColor is set', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.failed),
+          onTap: () {},
+          accountColor: Colors.teal,
+        ),
+      ),
+    ));
+
+    expect(find.byIcon(Icons.error_outline), findsOneWidget);
+    expect(find.byKey(const Key('accountColorDot')), findsNothing);
+  });
 }
