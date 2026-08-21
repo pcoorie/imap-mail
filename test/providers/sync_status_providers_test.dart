@@ -169,4 +169,38 @@ void main() {
     expect(container.read(syncErrorProvider(accountId)), isNotNull);
     expect(container.read(syncErrorProvider(accountId)), contains('connection refused'));
   });
+
+  test(
+      'syncErrorProvider: setting the error state for one accountId does not affect another accountId (per-account isolation, the entire point of the family key)',
+      () async {
+    // No DB/transport needed here — this tests the family's own key
+    // isolation, which is orthogonal to how foldersProvider/messagesProvider
+    // populate it. Simulating two concurrently-syncing accounts (accountA
+    // failing, accountB healthy) directly via the notifiers is the most
+    // direct proof that the family doesn't secretly share state across keys.
+    const accountA = 1;
+    const accountB = 2;
+
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+
+    // Both start unset.
+    expect(container.read(syncErrorProvider(accountA)), isNull);
+    expect(container.read(syncErrorProvider(accountB)), isNull);
+
+    // Account A's sync fails...
+    container.read(syncErrorProvider(accountA).notifier).state = 'connection refused';
+
+    // ...and must be readable under its own key...
+    expect(container.read(syncErrorProvider(accountA)), 'connection refused');
+    // ...without leaking into account B's independent key.
+    expect(container.read(syncErrorProvider(accountB)), isNull);
+
+    // Account B's sync then succeeds explicitly (mirrors what
+    // foldersProvider/messagesProvider do on success) — this must not clear
+    // account A's still-outstanding failure.
+    container.read(syncErrorProvider(accountB).notifier).state = null;
+    expect(container.read(syncErrorProvider(accountA)), 'connection refused');
+    expect(container.read(syncErrorProvider(accountB)), isNull);
+  });
 }
