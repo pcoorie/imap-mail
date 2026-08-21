@@ -4,6 +4,7 @@ import 'providers/account_providers.dart';
 import 'providers/theme_providers.dart';
 import 'screens/account_list_screen.dart';
 import 'screens/account_form_screen.dart';
+import 'screens/folder_view_screen.dart';
 
 const _brandSeed = Color(0xFF0A5BD6);
 
@@ -32,9 +33,11 @@ class ImapMailApp extends ConsumerWidget {
         builder: (context, ref, _) {
           final accountsAsync = ref.watch(accountsProvider);
           return accountsAsync.when(
-            data: (accounts) => accounts.isEmpty
-                ? const AccountFormScreen()
-                : const AccountListScreen(),
+            data: (accounts) => switch (accounts.length) {
+              0 => const AccountFormScreen(),
+              1 => FolderViewScreen(accountId: accounts.single.id!),
+              _ => const AccountListScreen(),
+            },
             loading: () => const Scaffold(body: Center(child: CircularProgressIndicator())),
             error: (error, _) => Scaffold(
               body: Center(child: Text('Failed to load accounts: $error')),
