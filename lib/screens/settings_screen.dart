@@ -32,7 +32,21 @@ class SettingsScreen extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final swipeConfig = ref.watch(swipeActionConfigProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: const Text('Settings'),
+        actions: [
+          // Single-account routing (app.dart) skips AccountListScreen
+          // entirely once there's only one account — its `+` button was the
+          // only path to AccountFormScreen's add mode, which meant a
+          // single-account user could never add a second account at all.
+          IconButton(
+            icon: const Icon(Icons.add),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AccountFormScreen()),
+            ),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(

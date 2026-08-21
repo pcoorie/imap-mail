@@ -7,6 +7,7 @@ import 'package:imap_mail/models/swipe_action.dart';
 import 'package:imap_mail/providers/account_providers.dart';
 import 'package:imap_mail/providers/swipe_action_providers.dart';
 import 'package:imap_mail/providers/theme_providers.dart';
+import 'package:imap_mail/screens/account_form_screen.dart';
 import 'package:imap_mail/screens/settings_screen.dart';
 
 void main() {
@@ -38,6 +39,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Remove this account?'), findsOneWidget);
+  });
+
+  testWidgets('an Add account icon opens AccountFormScreen in add mode — the only path there once single-account routing skips AccountListScreen entirely', (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        themeModeProvider.overrideWith(() => _FakeThemeModeNotifier(ThemeMode.system)),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: SettingsScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpAndSettle();
+
+    final form = tester.widget<AccountFormScreen>(find.byType(AccountFormScreen));
+    expect(form.existing, isNull);
   });
 
   testWidgets('theme segmented control reflects the current mode and calls setThemeMode on change', (tester) async {
