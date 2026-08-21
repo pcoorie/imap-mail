@@ -24,24 +24,12 @@ class _FolderTreeExpanderState extends State<FolderTreeExpander> {
           icon: Icon(_expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down),
           label: const Text('More folders'),
         ),
-        // Capped and scrollable so a long folder list can't grow unbounded
-        // inside the parent Column — left uncapped, expanding this list
-        // pushes past the available height, overflows the RenderFlex, and
-        // squeezes the message list below it down to zero height.
         if (_expanded)
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 200),
-            child: ListView(
-              shrinkWrap: true,
-              children: widget.folders
-                  .map((folder) => ListTile(
-                        dense: true,
-                        title: Text(folder.name),
-                        onTap: () => widget.onSelect(folder),
-                      ))
-                  .toList(),
-            ),
-          ),
+          ...widget.folders.map((folder) => ListTile(
+                dense: true,
+                title: Text(folder.name),
+                onTap: () => widget.onSelect(folder),
+              )),
       ],
     );
   }

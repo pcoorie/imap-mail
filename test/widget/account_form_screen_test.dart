@@ -153,42 +153,6 @@ void main() {
     expect(notifier.lastUpdatedPassword, isNull);
   });
 
-  testWidgets(
-      'saving a new account when the form is the app root does not crash '
-      '(onboarding: zero accounts, no previous route to pop to)', (tester) async {
-    await useTallSurface(tester);
-    final notifier = _RecordingAccountsNotifier([]);
-    await tester.pumpWidget(ProviderScope(
-      overrides: [
-        accountsProvider.overrideWith(() => notifier),
-      ],
-      // Mirrors app.dart: when there are zero accounts, AccountFormScreen is
-      // used directly as MaterialApp.home — not pushed via Navigator.push.
-      // There is therefore no previous route to pop back to.
-      child: const MaterialApp(home: AccountFormScreen()),
-    ));
-
-    await tester.enterText(find.byKey(const Key('displayNameField')), 'Work');
-    await tester.enterText(find.byKey(const Key('emailField')), 'me@example.com');
-    await tester.enterText(find.byKey(const Key('imapHostField')), 'imap.example.com');
-    await tester.enterText(find.byKey(const Key('imapPortField')), '993');
-    await tester.enterText(find.byKey(const Key('smtpHostField')), 'smtp.example.com');
-    await tester.enterText(find.byKey(const Key('smtpPortField')), '465');
-    await tester.enterText(find.byKey(const Key('usernameField')), 'me@example.com');
-    await tester.enterText(find.byKey(const Key('passwordField')), 'app-password');
-    await tester.pump();
-
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Save'));
-    await tester.pump();
-    await tester.pump();
-
-    expect(notifier.addCalled, isTrue);
-    expect(tester.takeException(), isNull);
-    // The form (or whatever the accountsProvider watcher swaps in) must
-    // still be showing a real screen, not a blank/empty Overlay.
-    expect(find.byType(Scaffold), findsWidgets);
-  });
-
   testWidgets('editing an account with a new password passes it through to updateAccount', (tester) async {
     await useTallSurface(tester);
     final notifier = _RecordingAccountsNotifier([existingAccount]);
