@@ -18,6 +18,7 @@ import '../widgets/sync_error_banner.dart';
 import 'account_form_screen.dart';
 import 'compose_screen.dart';
 import 'message_detail_screen.dart';
+import 'settings_screen.dart';
 
 class FolderViewScreen extends ConsumerStatefulWidget {
   const FolderViewScreen({super.key, required this.accountId});
@@ -37,7 +38,21 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
     final syncError = ref.watch(syncErrorProvider(widget.accountId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Mail')),
+      appBar: AppBar(
+        title: const Text('Mail'),
+        actions: [
+          // Single-account routing (app.dart) skips AccountListScreen
+          // entirely — its gear icon was the only path to SettingsScreen,
+          // so a single-account user would otherwise have no way to reach
+          // theme/swipe-action settings at all.
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => ComposeScreen(accountId: widget.accountId)),

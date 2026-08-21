@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:imap_mail/data/repository/mail_repository.dart';
 import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/models/mail_account.dart';
@@ -15,7 +16,9 @@ import 'package:imap_mail/providers/folder_providers.dart';
 import 'package:imap_mail/providers/message_providers.dart';
 import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/providers/swipe_action_providers.dart';
+import 'package:imap_mail/providers/theme_providers.dart';
 import 'package:imap_mail/screens/folder_view_screen.dart';
+import 'package:imap_mail/screens/settings_screen.dart';
 
 class _FakeAccountsNotifier extends AccountsNotifier {
   _FakeAccountsNotifier(this._accounts);
@@ -95,6 +98,28 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Archive'), findsOneWidget);
+  });
+
+  testWidgets('a settings icon opens SettingsScreen — the only path there once single-account routing skips AccountListScreen entirely', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+        messagesProvider.overrideWith((ref, folder) async => const []),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        sharedPreferencesProvider.overrideWithValue(prefs),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.settings_outlined));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SettingsScreen), findsOneWidget);
   });
 
   testWidgets(
