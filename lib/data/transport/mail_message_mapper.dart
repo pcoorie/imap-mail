@@ -21,6 +21,7 @@ MailMessage mapMimeMessageToRecord(MimeMessage mime, {required int folderId}) {
     bodyText: bodyText,
     bodyHtml: bodyHtml,
     isRead: mime.isSeen,
+    isFlagged: mime.isFlagged,
     isDownloaded: bodyText != null || bodyHtml != null,
   );
 }

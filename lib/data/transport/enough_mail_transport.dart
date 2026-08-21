@@ -76,6 +76,7 @@ class EnoughMailTransport implements MailTransport {
     if (box.isInbox) return MailFolderType.inbox;
     if (box.isSent) return MailFolderType.sent;
     if (box.isTrash) return MailFolderType.trash;
+    if (box.isArchive) return MailFolderType.archive;
     return MailFolderType.other;
   }
 
@@ -189,6 +190,80 @@ class EnoughMailTransport implements MailTransport {
         fetchPreference: enough.FetchPreference.full,
       );
       return mapMimeMessageAttachments(mimeMessages.first, messageId: message.id!);
+    } finally {
+      await client.disconnect();
+    }
+  }
+
+  @override
+  Future<void> setSeen(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+    bool value,
+  ) async {
+    final client = enough.MailClient(_toEnoughAccount(account, password));
+    try {
+      await client.connect();
+      await client.selectMailboxByPath(folder.path);
+      final sequence = enough.MessageSequence.fromId(message.uid, isUid: true);
+      await client.store(
+        sequence,
+        [enough.MessageFlags.seen],
+        action: value ? enough.StoreAction.add : enough.StoreAction.remove,
+      );
+    } finally {
+      await client.disconnect();
+    }
+  }
+
+  @override
+  Future<void> setFlagged(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+    bool value,
+  ) async {
+    final client = enough.MailClient(_toEnoughAccount(account, password));
+    try {
+      await client.connect();
+      await client.selectMailboxByPath(folder.path);
+      final sequence = enough.MessageSequence.fromId(message.uid, isUid: true);
+      await client.store(
+        sequence,
+        [enough.MessageFlags.flagged],
+        action: value ? enough.StoreAction.add : enough.StoreAction.remove,
+      );
+    } finally {
+      await client.disconnect();
+    }
+  }
+
+  @override
+  Future<int?> moveMessage(
+    MailAccount account,
+    String password,
+    MailFolder source,
+    MailMessage message,
+    MailFolder destination,
+  ) async {
+    final client = enough.MailClient(_toEnoughAccount(account, password));
+    try {
+      await client.connect();
+      // Resolve the destination Mailbox object without selecting it (that
+      // would change the client's active mailbox away from the source,
+      // which moveMessages needs selected as the move-from mailbox).
+      final mailboxes = await client.listMailboxes();
+      final targetMailbox = mailboxes.firstWhereOrNull((box) => box.path == destination.path);
+      if (targetMailbox == null) {
+        throw StateError('Destination folder ${destination.path} not found on server');
+      }
+      await client.selectMailboxByPath(source.path);
+      final sequence = enough.MessageSequence.fromId(message.uid, isUid: true);
+      final result = await client.moveMessages(sequence, targetMailbox);
+      return result.targetSequence?.toList().firstOrNull;
     } finally {
       await client.disconnect();
     }

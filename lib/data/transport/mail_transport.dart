@@ -40,4 +40,32 @@ abstract class MailTransport {
     MailFolder folder,
     MailMessage message,
   );
+
+  Future<void> setSeen(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+    bool value,
+  );
+
+  Future<void> setFlagged(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+    bool value,
+  );
+
+  /// Moves [message] from [source] to [destination] on the server. Returns
+  /// the message's new UID in [destination] if the server reports one (IMAP
+  /// MOVE/COPY typically assigns a new UID in the destination mailbox), or
+  /// `null` if it couldn't be determined.
+  Future<int?> moveMessage(
+    MailAccount account,
+    String password,
+    MailFolder source,
+    MailMessage message,
+    MailFolder destination,
+  );
 }

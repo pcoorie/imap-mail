@@ -77,6 +77,36 @@ void main() {
       );
       expect(MailMessage.fromMap(message.toMap()), message);
     });
+
+    test('round-trips isFlagged through toMap/fromMap', () {
+      final message = MailMessage(
+        id: 11,
+        folderId: 5,
+        uid: 43,
+        subject: 'Flagged',
+        from: 'a@example.com',
+        to: 'b@example.com',
+        date: DateTime.utc(2026, 8, 19, 12, 0),
+        snippet: 'Hi there',
+        isFlagged: true,
+      );
+      final restored = MailMessage.fromMap(message.toMap());
+      expect(restored.isFlagged, isTrue);
+      expect(restored, message);
+    });
+
+    test('isFlagged defaults to false', () {
+      final message = MailMessage(
+        folderId: 5,
+        uid: 44,
+        subject: 'Unflagged',
+        from: 'a@example.com',
+        to: 'b@example.com',
+        date: DateTime.utc(2026, 8, 19, 12, 0),
+        snippet: 'Hi there',
+      );
+      expect(message.isFlagged, isFalse);
+    });
   });
 
   group('MailAttachment', () {

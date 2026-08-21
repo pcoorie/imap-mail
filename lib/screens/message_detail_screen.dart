@@ -53,9 +53,19 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         });
       }
       // Fire-and-forget: marking a message read shouldn't block or fail the
-      // view from rendering its already-fetched content.
+      // view from rendering its already-fetched content. Swallow any error
+      // (e.g. offline) rather than surfacing it here — this isn't a swipe
+      // action, there's no retry affordance on this screen for it.
+      //
+      // revertLocalOnFailure: false for exactly that reason. The server sync
+      // is still attempted, but a failure must not undo the local read flag:
+      // with no Retry UI and the error swallowed below, reverting would mean
+      // opening and reading a cached message offline silently never marks it
+      // read, with zero feedback.
       if (resolved.id != null) {
-        unawaited(repository.markAsRead(resolved.id!));
+        unawaited(repository
+            .markRead(account, widget.folder, resolved, true, revertLocalOnFailure: false)
+            .catchError((_) {}));
       }
     } catch (e) {
       if (mounted) {
@@ -79,13 +89,20 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     if (confirmed == true) {
       try {
         final repository = await ref.read(mailRepositoryProvider.future);
-        await repository.deleteMessage(widget.folder, _resolved ?? widget.message);
+        if (!mounted) return;
+        final accounts = await ref.read(accountsProvider.future);
+        if (!mounted) return;
+        final account = accounts.firstWhere((a) => a.id == widget.folder.accountId);
+        await repository.deleteMessage(account, widget.folder, _resolved ?? widget.message);
+        // Guarded because deleting is now a full IMAP MOVE round-trip, not
+        // the instant local DAO write it used to be: pressing back during a
+        // slow delete disposes this State, and `ref` throws a StateError
+        // once disposed.
+        if (!mounted) return;
         // Without this, the folder view keeps showing the just-deleted
         // message until a manual pull-to-refresh.
         ref.invalidate(messagesProvider(widget.folder));
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
+        Navigator.of(context).pop();
       } catch (e) {
         if (mounted) {
           setState(() => _error = 'Could not delete message: $e');

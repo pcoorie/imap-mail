@@ -36,6 +36,7 @@ class MessageDao {
           'date': message.date.toUtc().millisecondsSinceEpoch,
           'snippet': message.snippet,
           'is_read': message.isRead ? 1 : 0,
+          'is_flagged': message.isFlagged ? 1 : 0,
         };
         if (message.isDownloaded) {
           map['body_text'] = message.bodyText;
@@ -114,19 +115,38 @@ class MessageDao {
     );
   }
 
-  Future<void> moveToFolder(int messageId, int newFolderId) async {
-    final rows = await _db.rawQuery(
-      'SELECT MIN(uid) as min_uid FROM messages WHERE folder_id = ?',
-      [newFolderId],
+  Future<void> updateFlagStatus(int id, bool isFlagged) async {
+    await _db.update(
+      'messages',
+      {'is_flagged': isFlagged ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
     );
-    final minUid = rows.first['min_uid'] as int?;
-    final uid = (minUid == null || minUid >= 0) ? -1 : minUid - 1;
+  }
+
+  /// Moves a message to [newFolderId]. If [newUid] is given (the server's
+  /// real post-move UID, once known), it's used as-is. Otherwise a synthetic
+  /// negative placeholder UID is synthesized, the same way this method
+  /// always worked before real server moves existed — a local-only move
+  /// (or the optimistic pre-server-confirmation step of a real move) has no
+  /// real UID to use yet.
+  Future<void> moveToFolder(int messageId, int newFolderId, {int? newUid}) async {
+    final uid = newUid ?? await _syntheticUidFor(newFolderId);
     await _db.update(
       'messages',
       {'folder_id': newFolderId, 'uid': uid},
       where: 'id = ?',
       whereArgs: [messageId],
     );
+  }
+
+  Future<int> _syntheticUidFor(int folderId) async {
+    final rows = await _db.rawQuery(
+      'SELECT MIN(uid) as min_uid FROM messages WHERE folder_id = ?',
+      [folderId],
+    );
+    final minUid = rows.first['min_uid'] as int?;
+    return (minUid == null || minUid >= 0) ? -1 : minUid - 1;
   }
 
   Future<void> deleteMessage(int id) async {

@@ -1,12 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:imap_mail/data/local/account_dao.dart';
 import 'package:imap_mail/data/local/app_database.dart';
 import 'package:imap_mail/data/local/attachment_dao.dart';
 import 'package:imap_mail/data/local/folder_dao.dart';
 import 'package:imap_mail/data/local/message_dao.dart';
+import 'package:imap_mail/data/repository/mail_repository.dart';
 import 'package:imap_mail/data/secure/credential_store.dart';
 import 'package:imap_mail/data/transport/mail_sender.dart';
 import 'package:imap_mail/data/transport/mail_transport.dart';
@@ -20,6 +24,8 @@ import 'package:imap_mail/providers/database_providers.dart';
 import 'package:imap_mail/providers/message_providers.dart';
 import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/screens/message_detail_screen.dart';
+
+class MockMailRepository extends Mock implements MailRepository {}
 
 class _FakeAccountsNotifier extends AccountsNotifier {
   _FakeAccountsNotifier(this._accounts);
@@ -44,6 +50,8 @@ class _FakeCredentialStore implements SecureCredentialStore {
 /// for every domain type.
 class _FakeMailTransport implements MailTransport {
   bool throwOnFetchBody = false;
+  bool throwOnSetSeen = false;
+  int setSeenCallCount = 0;
   int fetchHeadersSinceCallCount = 0;
 
   @override
@@ -94,6 +102,39 @@ class _FakeMailTransport implements MailTransport {
     MailMessage message,
   ) async =>
       [];
+
+  @override
+  Future<void> setSeen(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+    bool value,
+  ) async {
+    setSeenCallCount++;
+    if (throwOnSetSeen) {
+      throw Exception('offline');
+    }
+  }
+
+  @override
+  Future<void> setFlagged(
+    MailAccount account,
+    String password,
+    MailFolder folder,
+    MailMessage message,
+    bool value,
+  ) async {}
+
+  @override
+  Future<int?> moveMessage(
+    MailAccount account,
+    String password,
+    MailFolder source,
+    MailMessage message,
+    MailFolder destination,
+  ) async =>
+      null;
 }
 
 class _FakeMailSender implements MailSender {
@@ -109,6 +150,27 @@ class _FakeMailSender implements MailSender {
 
 void main() {
   setUpAll(() {
+    registerFallbackValue(const MailAccount(
+      displayName: '',
+      email: '',
+      imapHost: '',
+      imapPort: 993,
+      imapSecurity: MailSecurity.ssl,
+      smtpHost: '',
+      smtpPort: 465,
+      smtpSecurity: MailSecurity.ssl,
+      username: '',
+    ));
+    registerFallbackValue(const MailFolder(accountId: 1, name: '', path: '', type: MailFolderType.inbox));
+    registerFallbackValue(MailMessage(
+      folderId: 1,
+      uid: 1,
+      subject: '',
+      from: '',
+      to: '',
+      date: DateTime.utc(2026, 1, 1),
+      snippet: '',
+    ));
     sqfliteFfiInit();
     // Use the no-isolate ffi factory: this test pumps a real widget that
     // awaits real async DAO calls through mailRepositoryProvider inside
@@ -127,7 +189,11 @@ void main() {
   // established fix). We instead override databaseProvider with a
   // pre-populated in-memory sqflite database and accountsProvider with a
   // fake notifier, exercising the real MailRepository/DAO logic without
-  // touching any platform channel.
+  // touching any platform channel. mailTransportProvider/credentialStoreProvider
+  // are also always overridden now: MessageDetailScreen's _load() fires a
+  // fire-and-forget markRead on every open, which (since markRead syncs to
+  // the server) would otherwise try a real network connection to
+  // imap.example.com and hang the test.
   Future<
       ({
         MailAccount account,
@@ -142,7 +208,7 @@ void main() {
     final db = await databaseFactory.openDatabase(
       inMemoryDatabasePath,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: AppDatabase.onCreate,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
       ),
@@ -201,6 +267,8 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
       ],
       child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
     ));
@@ -225,6 +293,8 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
       ],
       child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
     ));
@@ -246,6 +316,8 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
       ],
       child: MaterialApp(
         home: Navigator(
@@ -285,6 +357,8 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
       ],
       child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
     ));
@@ -293,6 +367,83 @@ void main() {
 
     final refreshed = await MessageDao(seed.db).getById(seed.message.id!);
     expect(refreshed!.isRead, isTrue);
+  });
+
+  testWidgets(
+      'marking read on open still sticks when the server sync fails (offline) — '
+      'the local read flag is not reverted', (tester) async {
+    final seed = await seedDatabase();
+    addTearDown(() => seed.db.close());
+    final transport = _FakeMailTransport()..throwOnSetSeen = true;
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        databaseProvider.overrideWith((ref) async => seed.db),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(transport),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
+      ],
+      child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // The server sync is still attempted — this call site doesn't skip it,
+    // it just doesn't undo the local write when it fails.
+    expect(transport.setSeenCallCount, 1);
+    // Auto-mark-read-on-open has no Retry affordance and the error is
+    // swallowed, so reverting here would mean reading a cached message
+    // offline silently never marks it read.
+    final refreshed = await MessageDao(seed.db).getById(seed.message.id!);
+    expect(refreshed!.isRead, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'leaving the screen during a slow delete does not throw (post-await ref guard)',
+      (tester) async {
+    final seed = await seedDatabase();
+    addTearDown(() => seed.db.close());
+    final repository = MockMailRepository();
+    final deleteCompleter = Completer<MailMessage>();
+    when(() => repository.fetchBodyIfNeeded(any(), any(), any())).thenAnswer((_) async => seed.message);
+    when(() => repository.getAttachments(any())).thenAnswer((_) async => <MailAttachment>[]);
+    when(() => repository.markRead(any(), any(), any(), any(),
+        revertLocalOnFailure: any(named: 'revertLocalOnFailure'))).thenAnswer((_) async {});
+    when(() => repository.deleteMessage(any(), any(), any())).thenAnswer((_) => deleteCompleter.future);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+      ],
+      child: MaterialApp(
+        home: Navigator(
+          onGenerateRoute: (settings) => MaterialPageRoute(
+            builder: (_) => MessageDetailScreen(folder: seed.folder, message: seed.message),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.byIcon(Icons.delete_outline));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+    // Single pumps: _confirmDelete is now suspended awaiting the delete.
+    await tester.pump();
+    await tester.pump();
+
+    // Tear the screen down while the IMAP MOVE is still in flight — this
+    // plan widened that window from an instant local DAO write to a full
+    // server round-trip, making "press back during a slow delete" reachable.
+    await tester.pumpWidget(const MaterialApp(home: Scaffold(body: SizedBox())));
+
+    deleteCompleter.complete(seed.message);
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('shows an error with a Retry button instead of a permanent spinner when loading the body fails',
@@ -384,6 +535,7 @@ void main() {
       overrides: [
         databaseProvider.overrideWith((ref) async => seed.db),
         accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
         credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
         mailSenderProvider.overrideWithValue(sender),
       ],

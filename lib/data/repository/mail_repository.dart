@@ -127,11 +127,115 @@ class MailRepository {
     return fetched;
   }
 
-  /// Marks a message as read locally. Deliberately minimal: folder-level
-  /// unread COUNTS are not recalculated here (see FolderDao/discoverFolders
-  /// — that's a larger, deliberately deferred feature; see final review
-  /// report).
-  Future<void> markAsRead(int messageId) => _messageDao.updateReadStatus(messageId, true);
+  /// Moves [message] from [from] to [to], locally and on the server.
+  /// Optimistic: the local row moves first (instant UI feedback), then the
+  /// server-side move happens; once the server confirms with a new UID, the
+  /// local row is corrected to use it (so a subsequent move — e.g. an Undo
+  /// — addresses the right message). On failure, the local move is reverted
+  /// and the error rethrown so callers can retry.
+  Future<MailMessage> moveMessage(
+    MailAccount account,
+    MailFolder from,
+    MailFolder to,
+    MailMessage message,
+  ) async {
+    await _messageDao.moveToFolder(message.id!, to.id!);
+    try {
+      final password = await _passwordFor(account);
+      final newUid = await _transport.moveMessage(account, password, from, message, to);
+      if (newUid != null) {
+        await _messageDao.moveToFolder(message.id!, to.id!, newUid: newUid);
+      }
+      return message.copyWith(folderId: to.id!, uid: newUid ?? message.uid);
+    } catch (_) {
+      // Restore the ORIGINAL uid explicitly. `message` is the untouched
+      // method parameter (never reassigned above), so message.uid is still
+      // the pre-move value. Reverting without it would make
+      // MessageDao.moveToFolder synthesize a fresh negative placeholder,
+      // permanently destroying the message's real server UID on every
+      // failed move — i.e. exactly the offline/server-error case this
+      // revert exists for.
+      await _messageDao.moveToFolder(message.id!, from.id!, newUid: message.uid);
+      rethrow;
+    }
+  }
+
+  /// Moves [message] to the account's Archive folder. Throws [StateError]
+  /// if the account has no Archive folder — nothing is moved in that case.
+  Future<MailMessage> archiveMessage(
+    MailAccount account,
+    MailFolder currentFolder,
+    MailMessage message,
+  ) async {
+    final folders = await _folderDao.getForAccount(currentFolder.accountId);
+    final archiveFolder = folders.where((f) => f.type == MailFolderType.archive).firstOrNull;
+    if (archiveFolder == null) {
+      throw StateError('No Archive folder found for account ${currentFolder.accountId}');
+    }
+    return moveMessage(account, currentFolder, archiveFolder, message);
+  }
+
+  /// Whether [message] carries a UID the IMAP server would actually
+  /// recognise. Negative uids are this codebase's synthetic local
+  /// placeholders (see [MessageDao.moveToFolder] / [MessageDao.insertLocal])
+  /// — assigned to locally-created rows, and to moved rows whose server
+  /// didn't report a post-move UID (no UIDPLUS/`COPYUID`). Addressing the
+  /// server with one would send a meaningless `UID STORE -1 ...`, which
+  /// `MessageSequence.fromId` does not validate.
+  static bool _hasServerUid(MailMessage message) => message.uid >= 0;
+
+  /// Marks a message's read status both locally and on the IMAP server.
+  /// Optimistic: the local row updates first, then the `\Seen` flag is
+  /// stored on the server. On failure the local row is reverted to its
+  /// prior value and the error rethrown.
+  ///
+  /// Set [revertLocalOnFailure] to false for call sites that have no retry
+  /// affordance (the automatic mark-read-when-opened path): those still
+  /// attempt the server sync and still rethrow, but keep the local read
+  /// flag so reading a cached message offline isn't silently undone.
+  Future<void> markRead(
+    MailAccount account,
+    MailFolder folder,
+    MailMessage message,
+    bool isRead, {
+    bool revertLocalOnFailure = true,
+  }) async {
+    final previous = message.isRead;
+    await _messageDao.updateReadStatus(message.id!, isRead);
+    // Local-only/placeholder-uid rows have nothing addressable on the
+    // server; the local write above is the whole operation.
+    if (!_hasServerUid(message)) return;
+    try {
+      final password = await _passwordFor(account);
+      await _transport.setSeen(account, password, folder, message, isRead);
+    } catch (_) {
+      if (revertLocalOnFailure) {
+        await _messageDao.updateReadStatus(message.id!, previous);
+      }
+      rethrow;
+    }
+  }
+
+  /// Same optimistic-then-revert-on-failure pattern as [markRead], for the
+  /// `\Flagged` flag.
+  Future<void> markFlagged(
+    MailAccount account,
+    MailFolder folder,
+    MailMessage message,
+    bool isFlagged,
+  ) async {
+    final previous = message.isFlagged;
+    await _messageDao.updateFlagStatus(message.id!, isFlagged);
+    // See markRead: never address the server with a synthetic uid.
+    if (!_hasServerUid(message)) return;
+    try {
+      final password = await _passwordFor(account);
+      await _transport.setFlagged(account, password, folder, message, isFlagged);
+    } catch (_) {
+      await _messageDao.updateFlagStatus(message.id!, previous);
+      rethrow;
+    }
+  }
 
   Future<List<MailAttachment>> getAttachments(int messageId) {
     return _attachmentDao.getForMessage(messageId);
@@ -202,14 +306,26 @@ class MailRepository {
     }
   }
 
-  Future<void> deleteMessage(MailFolder currentFolder, MailMessage message) async {
+  /// Deletes a message by moving it to Trash (locally and on the server), or
+  /// permanently removing it locally when there's no Trash folder to move it
+  /// to, or when it's already in Trash. Those permanent-removal branches
+  /// stay local-only — deliberately: this app doesn't implement IMAP
+  /// permanent delete (STORE \Deleted + EXPUNGE), only the move-based path
+  /// that's the day-to-day case. Returns the resulting message so callers
+  /// can tell which branch ran (`result.folderId != currentFolder.id` means
+  /// it moved to Trash).
+  Future<MailMessage> deleteMessage(
+    MailAccount account,
+    MailFolder currentFolder,
+    MailMessage message,
+  ) async {
     final folders = await _folderDao.getForAccount(currentFolder.accountId);
     final trashFolder = folders.where((f) => f.type == MailFolderType.trash).firstOrNull;
     if (trashFolder != null && trashFolder.id != currentFolder.id) {
-      await _messageDao.moveToFolder(message.id!, trashFolder.id!);
-    } else {
-      await _messageDao.deleteMessage(message.id!);
+      return moveMessage(account, currentFolder, trashFolder, message);
     }
+    await _messageDao.deleteMessage(message.id!);
+    return message;
   }
 
   Future<void> retryFailedMessage(MailAccount account, MailMessage failedMessage) async {
