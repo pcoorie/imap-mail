@@ -527,4 +527,39 @@ void main() {
 
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+      'removing the account from accountsProvider while its FolderViewScreen is still mounted and rendering '
+      'messages does not crash — renders the loading fallback instead of throwing a StateError from an '
+      'unguarded firstWhere', (tester) async {
+    final accountsNotifier = _FakeAccountsNotifier([account]);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+        accountsProvider.overrideWith(() => accountsNotifier),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    // Sanity check: the message renders normally while the account exists.
+    expect(find.text('Hello'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    // Simulate the account vanishing out from under this still-mounted
+    // screen (e.g. removed from another screen) — accountsProvider now
+    // resolves to a list that no longer contains this folder's accountId,
+    // but messagesProvider/foldersProvider still serve their cached data.
+    accountsNotifier.state = const AsyncData([]);
+    // Not pumpAndSettle: the fallback is an indeterminate
+    // CircularProgressIndicator, whose animation never settles.
+    await tester.pump();
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+  });
 }

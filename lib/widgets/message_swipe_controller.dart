@@ -85,6 +85,13 @@ class MessageSwipeController {
     required SwipeAction primary,
     required SwipeAction secondary,
     required MailAccount account,
+    // Captured by value at build time, not re-read lazily after an await:
+    // the callers of this method (_MessageList / _UnifiedMessageList) have
+    // no Key, so a tab/folder switch can mutate the owning State's folder
+    // out from under an in-flight swipe action. Closing over this parameter
+    // (rather than e.g. a `folder` getter read fresh post-await) guarantees
+    // performSwipeAction always acts on the folder the swipe actually
+    // started in.
     required MailFolder folder,
     required MailMessage message,
     required void Function(int messageId) onRemoved,

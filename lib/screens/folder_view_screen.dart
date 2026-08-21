@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
@@ -191,7 +192,17 @@ class _MessageListState extends ConsumerState<_MessageList> {
             itemCount: visible.length,
             itemBuilder: (context, index) {
               final message = visible[index];
-              final account = accounts!.firstWhere((a) => a.id == folder.accountId);
+              // firstWhereOrNull, not firstWhere: the account can vanish out
+              // from under an still-mounted FolderViewScreen (e.g. removed
+              // in another screen while this one stays alive) — falling back
+              // to the same loading state used above rather than crashing
+              // with an unguarded StateError, exactly like the pre-Task-5
+              // inline version handled this same lookup failing inside
+              // _performSwipeAction's try block.
+              final account = accounts!.firstWhereOrNull((a) => a.id == folder.accountId);
+              if (account == null) {
+                return const Center(child: CircularProgressIndicator());
+              }
               return Slidable(
                 key: ValueKey(message.id),
                 startActionPane: _swipeController.buildActionPane(

@@ -1,6 +1,6 @@
-import '../models/mail_account.dart';
-import '../models/mail_folder.dart';
-import '../models/mail_message.dart';
+import 'mail_account.dart';
+import 'mail_folder.dart';
+import 'mail_message.dart';
 
 /// Bundles a message with the folder and account it belongs to. Produced by
 /// `unifiedInboxProvider`, which merges every account's Inbox into one
