@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
+import '../models/enums.dart';
 import '../models/mail_account.dart';
 import '../models/unified_message.dart';
 import '../providers/account_providers.dart';
+import '../providers/folder_providers.dart';
 import '../providers/message_providers.dart';
 import '../providers/swipe_action_providers.dart';
 import '../providers/sync_status_providers.dart';
@@ -15,6 +17,39 @@ import '../widgets/message_swipe_controller.dart';
 import '../widgets/sync_error_banner.dart';
 import 'compose_screen.dart';
 import 'message_detail_screen.dart';
+
+/// Invalidates every underlying provider `unifiedInboxProvider` derives its
+/// data from — each account's `foldersProvider(accountId)` and each
+/// account's Inbox `messagesProvider(folder)` — before invalidating
+/// `unifiedInboxProvider` itself.
+///
+/// This is the fix for three related bugs: (1) Retry/refresh previously only
+/// invalidated `unifiedInboxProvider`, which just re-reads the same cached
+/// (error or stale) values straight back from its still-unchanged
+/// dependencies — a no-op; (2) pull-to-refresh derived which folders to
+/// invalidate from the *current* (possibly empty, e.g. every account
+/// failed) unified list, so it had nothing to invalidate exactly when a
+/// retry was most needed; (3) nothing ever invalidated `foldersProvider`
+/// from this screen, so `totalUnreadCountProvider` (which depends only on
+/// `foldersProvider`) could never pick up a fresher unread count once
+/// resolved once.
+///
+/// Deriving folders from `accountsProvider`'s own resolved value and each
+/// account's already-cached `foldersProvider(accountId)` result — not from
+/// `unifiedInboxProvider`'s current (possibly empty) list — is what makes
+/// this work even when every account is currently failed/empty.
+void _invalidateAllInboxSources(WidgetRef ref) {
+  final accounts = ref.read(accountsProvider).valueOrNull ?? const [];
+  for (final account in accounts) {
+    final accountId = account.id!;
+    final folders = ref.read(foldersProvider(accountId)).valueOrNull ?? const [];
+    for (final folder in folders.where((f) => f.type == MailFolderType.inbox)) {
+      ref.invalidate(messagesProvider(folder));
+    }
+    ref.invalidate(foldersProvider(accountId));
+  }
+  ref.invalidate(unifiedInboxProvider);
+}
 
 class UnifiedInboxScreen extends ConsumerWidget {
   const UnifiedInboxScreen({super.key});
@@ -99,7 +134,7 @@ class _UnifiedMessageListState extends ConsumerState<_UnifiedMessageList> {
                 ),
                 actions: [
                   TextButton(
-                    onPressed: () => ref.invalidate(unifiedInboxProvider),
+                    onPressed: () => _invalidateAllInboxSources(ref),
                     child: const Text('Retry'),
                   ),
                   TextButton(
@@ -114,14 +149,7 @@ class _UnifiedMessageListState extends ConsumerState<_UnifiedMessageList> {
               ),
             Expanded(
               child: RefreshIndicator(
-                onRefresh: () async {
-                  final current = ref.read(unifiedInboxProvider).valueOrNull ?? const [];
-                  final folders = {for (final u in current) u.folder.id: u.folder}.values;
-                  for (final folder in folders) {
-                    ref.invalidate(messagesProvider(folder));
-                  }
-                  ref.invalidate(unifiedInboxProvider);
-                },
+                onRefresh: () async => _invalidateAllInboxSources(ref),
                 child: ListView.builder(
                   itemCount: visible.length,
                   itemBuilder: (context, index) {
@@ -164,7 +192,7 @@ class _UnifiedMessageListState extends ConsumerState<_UnifiedMessageList> {
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) => SyncErrorBanner(
         message: error.toString(),
-        onRetry: () => ref.invalidate(unifiedInboxProvider),
+        onRetry: () => _invalidateAllInboxSources(ref),
       ),
     );
   }
