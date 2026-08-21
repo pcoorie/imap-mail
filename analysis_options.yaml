@@ -9,6 +9,13 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # Vendored dependency_overrides copy (see third_party/enough_mail/
+    # COBALT_MAIL_PATCH.md) — treat it like any other pub dependency,
+    # not part of this app's own code.
+    - third_party/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

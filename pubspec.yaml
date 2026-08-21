@@ -62,6 +62,16 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.4
   flutter_native_splash: ^2.4.6
 
+# Locally patched copy of enough_mail 2.1.7 — fixes a real upstream bug
+# (UID vs. sequence-number mismatch between the COPY and STORE \Deleted
+# calls in the MOVE-unsupported fallback, breaking archive/delete against
+# any server that lacks the IMAP MOVE extension). See
+# third_party/enough_mail/COBALT_MAIL_PATCH.md for details and how to
+# remove this once fixed upstream.
+dependency_overrides:
+  enough_mail:
+    path: third_party/enough_mail
+
 flutter_launcher_icons:
   image_path: "assets/icon/app_icon.png"
   android: true

@@ -220,10 +220,9 @@ packages:
   enough_mail:
     dependency: "direct main"
     description:
-      name: enough_mail
-      sha256: b8b3d4da3f3d727013c5ffc562046ed1d2553a7ffdcc7e7a0e7e1bb96ed445ae
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/enough_mail"
+      relative: true
+    source: path
     version: "2.1.7"
   equatable:
     dependency: "direct main"
