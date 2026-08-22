@@ -32,6 +32,7 @@ class MessageDao {
         final map = <String, Object?>{
           'subject': message.subject,
           'from_address': message.from,
+          'from_name': message.fromName,
           'to_address': message.to,
           'date': message.date.toUtc().millisecondsSinceEpoch,
           'snippet': message.snippet,

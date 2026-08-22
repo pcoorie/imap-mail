@@ -8,6 +8,7 @@ class MailMessage extends Equatable {
     required this.uid,
     required this.subject,
     required this.from,
+    this.fromName,
     required this.to,
     required this.date,
     required this.snippet,
@@ -24,6 +25,12 @@ class MailMessage extends Equatable {
   final int uid;
   final String subject;
   final String from;
+  /// The sender's display name (the MIME `From` header's personal-name part
+  /// — e.g. "Chris Quinones" for `Chris Quinones <chris@example.com>`), when
+  /// the server sent one. Null for addresses with no display name (common
+  /// for bare automated senders like `noreply@example.com`). Used to derive
+  /// the sender avatar's initials — see `widgets/sender_avatar.dart`.
+  final String? fromName;
   final String to;
   final DateTime date;
   final String snippet;
@@ -40,6 +47,7 @@ class MailMessage extends Equatable {
     int? uid,
     String? subject,
     String? from,
+    String? fromName,
     String? to,
     DateTime? date,
     String? snippet,
@@ -56,6 +64,7 @@ class MailMessage extends Equatable {
       uid: uid ?? this.uid,
       subject: subject ?? this.subject,
       from: from ?? this.from,
+      fromName: fromName ?? this.fromName,
       to: to ?? this.to,
       date: date ?? this.date,
       snippet: snippet ?? this.snippet,
@@ -75,6 +84,7 @@ class MailMessage extends Equatable {
       'uid': uid,
       'subject': subject,
       'from_address': from,
+      'from_name': fromName,
       'to_address': to,
       'date': date.toUtc().millisecondsSinceEpoch,
       'snippet': snippet,
@@ -94,6 +104,7 @@ class MailMessage extends Equatable {
       uid: map['uid'] as int,
       subject: map['subject'] as String,
       from: map['from_address'] as String,
+      fromName: map['from_name'] as String?,
       to: map['to_address'] as String,
       date: DateTime.fromMillisecondsSinceEpoch(map['date'] as int, isUtc: true),
       snippet: map['snippet'] as String,
@@ -113,6 +124,7 @@ class MailMessage extends Equatable {
         uid,
         subject,
         from,
+        fromName,
         to,
         date,
         snippet,

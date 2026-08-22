@@ -10,6 +10,7 @@ import '../providers/folder_providers.dart';
 import '../providers/message_providers.dart';
 import '../providers/sync_status_providers.dart';
 import '../providers/swipe_action_providers.dart';
+import '../widgets/empty_folder_state.dart';
 import '../widgets/folder_tab_bar.dart';
 import '../widgets/folder_tree_expander.dart';
 import '../widgets/message_list_tile.dart';
@@ -47,26 +48,36 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
           // theme/swipe-action settings at all.
           IconButton(
             icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => ComposeScreen(accountId: widget.accountId)),
+          MaterialPageRoute(
+            builder: (_) => ComposeScreen(accountId: widget.accountId),
+          ),
         ),
         child: const Icon(Icons.edit),
       ),
       body: foldersAsync.when(
         data: (folders) {
           final defaults = <MailFolder>[
-            for (final type in [MailFolderType.inbox, MailFolderType.sent, MailFolderType.trash])
+            for (final type in [
+              MailFolderType.inbox,
+              MailFolderType.sent,
+              MailFolderType.trash,
+            ])
               ...folders.where((f) => f.type == type),
           ];
           final rest = folders.where((f) => !defaults.contains(f)).toList();
-          final current = _selected ?? (defaults.isNotEmpty ? defaults.first : (folders.isNotEmpty ? folders.first : null));
+          final current =
+              _selected ??
+              (defaults.isNotEmpty
+                  ? defaults.first
+                  : (folders.isNotEmpty ? folders.first : null));
 
           return Column(
             children: [
@@ -79,11 +90,20 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
                   content: Text('Showing saved data — sync failed: $syncError'),
                   actions: [
                     TextButton(
-                      onPressed: () => ref.invalidate(foldersProvider(widget.accountId)),
+                      onPressed: () =>
+                          ref.invalidate(foldersProvider(widget.accountId)),
                       child: const Text('Retry'),
                     ),
                     TextButton(
-                      onPressed: () => ref.read(syncErrorProvider(widget.accountId).notifier).state = null,
+                      onPressed: () =>
+                          ref
+                                  .read(
+                                    syncErrorProvider(
+                                      widget.accountId,
+                                    ).notifier,
+                                  )
+                                  .state =
+                              null,
                       child: const Text('Dismiss'),
                     ),
                   ],
@@ -113,7 +133,8 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
                 ),
               ),
               const Divider(height: 1),
-              if (current != null) Expanded(child: _MessageList(folder: current)),
+              if (current != null)
+                Expanded(child: _MessageList(folder: current)),
             ],
           );
         },
@@ -122,7 +143,9 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
           message: error.toString(),
           onRetry: () => ref.invalidate(foldersProvider(widget.accountId)),
           onEditAccount: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => AccountFormScreen(existing: _findAccount())),
+            MaterialPageRoute(
+              builder: (_) => AccountFormScreen(existing: _findAccount()),
+            ),
           ),
         ),
       ),
@@ -186,7 +209,9 @@ class _MessageListState extends ConsumerState<_MessageList> {
     return messagesAsync.when(
       data: (messages) {
         _pendingRemoval.retainAll(messages.map((m) => m.id).whereType<int>());
-        final visible = messages.where((m) => !_pendingRemoval.contains(m.id)).toList();
+        final visible = messages
+            .where((m) => !_pendingRemoval.contains(m.id))
+            .toList();
         // Only needed once there's an actual row to build (never touched by
         // an empty folder), and only watched here — not unconditionally at
         // the top of build — so an empty folder never needs accountsProvider
@@ -197,54 +222,91 @@ class _MessageListState extends ConsumerState<_MessageList> {
         // override messagesProvider directly — so fall back to the same
         // loading state messagesAsync itself would show, rather than
         // asserting non-null and crashing mid-build on that transient race.
-        final accounts = visible.isNotEmpty ? ref.watch(accountsProvider).valueOrNull : null;
+        final accounts = visible.isNotEmpty
+            ? ref.watch(accountsProvider).valueOrNull
+            : null;
         if (visible.isNotEmpty && accounts == null) {
           return const Center(child: CircularProgressIndicator());
         }
         return RefreshIndicator(
-          onRefresh: () async => ref.invalidate(messagesProvider(folder)),
-          child: ListView.builder(
-            itemCount: visible.length,
-            itemBuilder: (context, index) {
-              final message = visible[index];
-              // firstWhereOrNull, not firstWhere: the account can vanish out
-              // from under an still-mounted FolderViewScreen (e.g. removed
-              // in another screen while this one stays alive) — falling back
-              // to the same loading state used above rather than crashing
-              // with an unguarded StateError, exactly like the pre-Task-5
-              // inline version handled this same lookup failing inside
-              // _performSwipeAction's try block.
-              final account = accounts!.firstWhereOrNull((a) => a.id == folder.accountId);
-              if (account == null) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              return Slidable(
-                key: ValueKey(message.id),
-                startActionPane: _swipeController.buildActionPane(
-                  primary: swipeConfig.leftPrimary,
-                  secondary: swipeConfig.leftSecondary,
-                  account: account,
-                  folder: folder,
-                  message: message,
-                  onRemoved: (id) => setState(() => _pendingRemoval.add(id)),
-                ),
-                endActionPane: _swipeController.buildActionPane(
-                  primary: swipeConfig.rightPrimary,
-                  secondary: swipeConfig.rightSecondary,
-                  account: account,
-                  folder: folder,
-                  message: message,
-                  onRemoved: (id) => setState(() => _pendingRemoval.add(id)),
-                ),
-                child: MessageListTile(
-                  message: message,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => MessageDetailScreen(folder: folder, message: message)),
+          // ref.invalidate() is synchronous — it only marks the provider
+          // dirty for its *next* read. Awaiting it (even wrapped in
+          // `async =>`) resolves immediately, before messagesProvider's
+          // rebuild (a real IMAP syncHeaders round-trip) has even started,
+          // which is why the spinner used to spring back instantly instead
+          // of reflecting how long the sync actually took. ref.refresh(...
+          // .future) both invalidates and returns the future of the fresh
+          // value, so awaiting it blocks until the resync genuinely finishes.
+          onRefresh: () => ref.refresh(messagesProvider(folder).future),
+          child: visible.isEmpty
+              ? LayoutBuilder(
+                  builder: (context, constraints) => ListView(
+                    // Still scrollable (not just Center()) so pull-to-refresh
+                    // stays reachable on an empty folder, not just a full one.
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      SizedBox(
+                        height: constraints.maxHeight,
+                        child: EmptyFolderState(
+                          message: 'No messages in ${folder.name}',
+                        ),
+                      ),
+                    ],
                   ),
+                )
+              : ListView.separated(
+                  itemCount: visible.length,
+                  separatorBuilder: (context, index) =>
+                      const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final message = visible[index];
+                    // firstWhereOrNull, not firstWhere: the account can vanish out
+                    // from under an still-mounted FolderViewScreen (e.g. removed
+                    // in another screen while this one stays alive) — falling back
+                    // to the same loading state used above rather than crashing
+                    // with an unguarded StateError, exactly like the pre-Task-5
+                    // inline version handled this same lookup failing inside
+                    // _performSwipeAction's try block.
+                    final account = accounts!.firstWhereOrNull(
+                      (a) => a.id == folder.accountId,
+                    );
+                    if (account == null) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    return Slidable(
+                      key: ValueKey(message.id),
+                      startActionPane: _swipeController.buildActionPane(
+                        primary: swipeConfig.leftPrimary,
+                        secondary: swipeConfig.leftSecondary,
+                        account: account,
+                        folder: folder,
+                        message: message,
+                        onRemoved: (id) =>
+                            setState(() => _pendingRemoval.add(id)),
+                      ),
+                      endActionPane: _swipeController.buildActionPane(
+                        primary: swipeConfig.rightPrimary,
+                        secondary: swipeConfig.rightSecondary,
+                        account: account,
+                        folder: folder,
+                        message: message,
+                        onRemoved: (id) =>
+                            setState(() => _pendingRemoval.add(id)),
+                      ),
+                      child: MessageListTile(
+                        message: message,
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => MessageDetailScreen(
+                              folder: folder,
+                              message: message,
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              );
-            },
-          ),
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),

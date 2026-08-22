@@ -100,6 +100,48 @@ void main() {
     expect(find.text('Archive'), findsOneWidget);
   });
 
+  testWidgets('shows a friendly empty-state placeholder instead of a blank screen when the '
+      'selected folder has no messages', (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+        messagesProvider.overrideWith((ref, folder) async => const []),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('No messages'), findsOneWidget);
+    expect(find.byIcon(Icons.inbox_outlined), findsOneWidget);
+  });
+
+  testWidgets('separates message rows with a thin divider when there is more than one',
+      (tester) async {
+    final second = message.copyWith(id: 101, uid: 2, subject: 'Second');
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+        messagesProvider.overrideWith((ref, folder) async => [message, second]),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Hello'), findsOneWidget);
+    expect(find.text('Second'), findsOneWidget);
+    // Exactly one divider between the two rows — not one trailing every row.
+    // Scoped to the message list itself: the screen already has its own
+    // structural divider above the list, unrelated to row separators.
+    final messageListDividers = find.descendant(
+      of: find.byType(ListView).last,
+      matching: find.byType(Divider),
+    );
+    expect(messageListDividers, findsOneWidget);
+  });
+
   testWidgets('a settings icon opens SettingsScreen — the only path there once single-account routing skips AccountListScreen entirely', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await SharedPreferences.getInstance();
@@ -152,6 +194,55 @@ void main() {
     // render in, not squeezed to zero height by the overflowing sibling.
     final listViewBox = tester.renderObject<RenderBox>(find.byType(ListView).last);
     expect(listViewBox.size.height, greaterThan(0));
+  });
+
+  testWidgets(
+      "pull-to-refresh's onRefresh does not resolve until the resync actually completes "
+      '(regression: ref.invalidate() alone resolved instantly, before messagesProvider\'s rebuild '
+      '— a real IMAP fetch — had even started)', (tester) async {
+    final resyncCompleter = Completer<List<MailMessage>>();
+    var callCount = 0;
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async {
+          callCount++;
+          // First build (initial load) resolves immediately; the second
+          // (pull-to-refresh's rebuild) stays pending until the test
+          // completes it, so we can observe whether onRefresh's own future
+          // waits for it.
+          if (callCount == 1) return [message];
+          return resyncCompleter.future;
+        }),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+    expect(callCount, 1);
+
+    // Call the RefreshIndicator's onRefresh directly rather than driving the
+    // drag gesture — what's under test is whether the future it returns
+    // tracks the real resync, not the indicator's own drag/arm animation.
+    final refreshIndicator = tester.widget<RefreshIndicator>(find.byType(RefreshIndicator));
+    var resolved = false;
+    unawaited(refreshIndicator.onRefresh().then((_) => resolved = true));
+
+    await tester.pump();
+    // The resync has started (messagesProvider rebuilt a second time) but its
+    // future is still pending. Before the fix, onRefresh's returned future
+    // was the instant, synchronous result of ref.invalidate() — it would
+    // already have resolved by this point regardless.
+    expect(callCount, 2);
+    expect(resolved, isFalse);
+
+    resyncCompleter.complete([message]);
+    await tester.pump();
+    await tester.pump();
+
+    expect(resolved, isTrue);
   });
 
   testWidgets('shows an error banner with Retry when folders fail to load', (tester) async {

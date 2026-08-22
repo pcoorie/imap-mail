@@ -129,6 +129,19 @@ void main() {
       expect(messages.firstWhere((m) => m.uid == 1).isRead, isTrue);
     });
 
+    test('upsertHeaders on an existing uid also updates fromName (regression: the update branch '
+        'builds its own explicit column map, separate from toMap() — from_name must be listed there '
+        'too or a re-sync would silently drop a previously-unknown display name once it becomes '
+        'available)', () async {
+      await messageDao.upsertHeaders([sampleMessage(1)]);
+      expect((await messageDao.getForFolder(folderId)).first.fromName, isNull);
+
+      await messageDao.upsertHeaders([sampleMessage(1).copyWith(fromName: 'Alice')]);
+
+      final updated = (await messageDao.getForFolder(folderId)).first;
+      expect(updated.fromName, 'Alice');
+    });
+
     test(
         'upsertHeaders on an existing uid preserves a previously-downloaded body when the new header data has no body',
         () async {

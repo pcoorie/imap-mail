@@ -66,6 +66,32 @@ void main() {
     expect(attachment.size, 1234);
   });
 
+  test('maps the primary From address\'s personalName into fromName', () {
+    final builder = MessageBuilder()
+      ..from = [MailAddress('Alice', 'alice@example.com')]
+      ..to = [MailAddress('Bob', 'bob@example.com')]
+      ..subject = 'Hello'
+      ..text = 'Hi Bob.';
+    final mime = builder.buildMimeMessage();
+
+    final message = mapMimeMessageToRecord(mime, folderId: 7);
+
+    expect(message.fromName, 'Alice');
+  });
+
+  test('leaves fromName null when the From address has no personalName', () {
+    final builder = MessageBuilder()
+      ..from = [MailAddress(null, 'noreply@example.com')]
+      ..to = [MailAddress('Bob', 'bob@example.com')]
+      ..subject = 'Hello'
+      ..text = 'Hi Bob.';
+    final mime = builder.buildMimeMessage();
+
+    final message = mapMimeMessageToRecord(mime, folderId: 7);
+
+    expect(message.fromName, isNull);
+  });
+
   test('maps isFlagged from the underlying MimeMessage flag', () {
     final builder = MessageBuilder()
       ..from = [MailAddress('Alice', 'alice@example.com')]

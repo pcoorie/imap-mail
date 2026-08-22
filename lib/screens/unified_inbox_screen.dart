@@ -12,6 +12,7 @@ import '../providers/sync_status_providers.dart';
 import '../providers/unified_inbox_providers.dart';
 import '../widgets/account_color.dart';
 import '../widgets/compose_account_picker.dart';
+import '../widgets/empty_folder_state.dart';
 import '../widgets/message_list_tile.dart';
 import '../widgets/message_swipe_controller.dart';
 import '../widgets/sync_error_banner.dart';
@@ -21,9 +22,10 @@ import 'message_detail_screen.dart';
 /// Invalidates every underlying provider `unifiedInboxProvider` derives its
 /// data from — each account's `foldersProvider(accountId)` and each
 /// account's Inbox `messagesProvider(folder)` — before invalidating
-/// `unifiedInboxProvider` itself.
+/// `unifiedInboxProvider` itself, then awaits that provider's freshly
+/// rebuilt value.
 ///
-/// This is the fix for three related bugs: (1) Retry/refresh previously only
+/// This is the fix for four related bugs: (1) Retry/refresh previously only
 /// invalidated `unifiedInboxProvider`, which just re-reads the same cached
 /// (error or stale) values straight back from its still-unchanged
 /// dependencies — a no-op; (2) pull-to-refresh derived which folders to
@@ -32,23 +34,32 @@ import 'message_detail_screen.dart';
 /// retry was most needed; (3) nothing ever invalidated `foldersProvider`
 /// from this screen, so `totalUnreadCountProvider` (which depends only on
 /// `foldersProvider`) could never pick up a fresher unread count once
-/// resolved once.
+/// resolved once; (4) every `ref.invalidate` call here is synchronous — it
+/// only marks a provider dirty for its *next* read — so callers that awaited
+/// this function were resolving before any of the real IMAP round-trips it
+/// triggers had even started (pull-to-refresh's spinner sprang back
+/// instantly instead of reflecting the actual resync). The trailing
+/// `await ref.read(unifiedInboxProvider.future)` fixes that: by the time it
+/// resolves, unifiedInboxProvider's rebuild has re-watched (and therefore
+/// awaited) every one of the dependencies just invalidated above.
 ///
 /// Deriving folders from `accountsProvider`'s own resolved value and each
 /// account's already-cached `foldersProvider(accountId)` result — not from
 /// `unifiedInboxProvider`'s current (possibly empty) list — is what makes
 /// this work even when every account is currently failed/empty.
-void _invalidateAllInboxSources(WidgetRef ref) {
+Future<void> _refreshAllInboxSources(WidgetRef ref) async {
   final accounts = ref.read(accountsProvider).valueOrNull ?? const [];
   for (final account in accounts) {
     final accountId = account.id!;
-    final folders = ref.read(foldersProvider(accountId)).valueOrNull ?? const [];
+    final folders =
+        ref.read(foldersProvider(accountId)).valueOrNull ?? const [];
     for (final folder in folders.where((f) => f.type == MailFolderType.inbox)) {
       ref.invalidate(messagesProvider(folder));
     }
     ref.invalidate(foldersProvider(accountId));
   }
   ref.invalidate(unifiedInboxProvider);
+  await ref.read(unifiedInboxProvider.future);
 }
 
 class UnifiedInboxScreen extends ConsumerWidget {
@@ -57,10 +68,13 @@ class UnifiedInboxScreen extends ConsumerWidget {
   Future<void> _compose(BuildContext context, WidgetRef ref) async {
     final accounts = await ref.read(accountsProvider.future);
     if (!context.mounted) return;
-    final MailAccount? chosen =
-        accounts.length == 1 ? accounts.single : await showComposeAccountPicker(context, accounts);
+    final MailAccount? chosen = accounts.length == 1
+        ? accounts.single
+        : await showComposeAccountPicker(context, accounts);
     if (chosen == null || !context.mounted) return;
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => ComposeScreen(accountId: chosen.id!)));
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ComposeScreen(accountId: chosen.id!)),
+    );
   }
 
   @override
@@ -80,7 +94,8 @@ class _UnifiedMessageList extends ConsumerStatefulWidget {
   const _UnifiedMessageList();
 
   @override
-  ConsumerState<_UnifiedMessageList> createState() => _UnifiedMessageListState();
+  ConsumerState<_UnifiedMessageList> createState() =>
+      _UnifiedMessageListState();
 }
 
 class _UnifiedMessageListState extends ConsumerState<_UnifiedMessageList> {
@@ -115,15 +130,20 @@ class _UnifiedMessageListState extends ConsumerState<_UnifiedMessageList> {
     // One sync-error banner covering every contributing account, rather
     // than one per account — mirrors FolderViewScreen's single banner, just
     // aggregated. Only meaningful once we know which accounts exist.
-    final failedAccountCount = accountsAsync.valueOrNull
+    final failedAccountCount =
+        accountsAsync.valueOrNull
             ?.where((a) => ref.watch(syncErrorProvider(a.id!)) != null)
             .length ??
         0;
 
     return unifiedAsync.when(
       data: (messages) {
-        _pendingRemoval.retainAll(messages.map((u) => u.message.id).whereType<int>());
-        final visible = messages.where((u) => !_pendingRemoval.contains(u.message.id)).toList();
+        _pendingRemoval.retainAll(
+          messages.map((u) => u.message.id).whereType<int>(),
+        );
+        final visible = messages
+            .where((u) => !_pendingRemoval.contains(u.message.id))
+            .toList();
 
         return Column(
           children: [
@@ -134,13 +154,17 @@ class _UnifiedMessageListState extends ConsumerState<_UnifiedMessageList> {
                 ),
                 actions: [
                   TextButton(
-                    onPressed: () => _invalidateAllInboxSources(ref),
+                    onPressed: () => _refreshAllInboxSources(ref),
                     child: const Text('Retry'),
                   ),
                   TextButton(
                     onPressed: () {
-                      for (final account in accountsAsync.valueOrNull ?? const []) {
-                        ref.read(syncErrorProvider(account.id!).notifier).state = null;
+                      for (final account
+                          in accountsAsync.valueOrNull ?? const []) {
+                        ref
+                                .read(syncErrorProvider(account.id!).notifier)
+                                .state =
+                            null;
                       }
                     },
                     child: const Text('Dismiss'),
@@ -149,41 +173,66 @@ class _UnifiedMessageListState extends ConsumerState<_UnifiedMessageList> {
               ),
             Expanded(
               child: RefreshIndicator(
-                onRefresh: () async => _invalidateAllInboxSources(ref),
-                child: ListView.builder(
-                  itemCount: visible.length,
-                  itemBuilder: (context, index) {
-                    final UnifiedMessage unified = visible[index];
-                    return Slidable(
-                      key: ValueKey(unified.message.id),
-                      startActionPane: _swipeController.buildActionPane(
-                        primary: swipeConfig.leftPrimary,
-                        secondary: swipeConfig.leftSecondary,
-                        account: unified.account,
-                        folder: unified.folder,
-                        message: unified.message,
-                        onRemoved: (id) => setState(() => _pendingRemoval.add(id)),
-                      ),
-                      endActionPane: _swipeController.buildActionPane(
-                        primary: swipeConfig.rightPrimary,
-                        secondary: swipeConfig.rightSecondary,
-                        account: unified.account,
-                        folder: unified.folder,
-                        message: unified.message,
-                        onRemoved: (id) => setState(() => _pendingRemoval.add(id)),
-                      ),
-                      child: MessageListTile(
-                        message: unified.message,
-                        accountColor: accountColorFor(unified.account.id!),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => MessageDetailScreen(folder: unified.folder, message: unified.message),
-                          ),
+                onRefresh: () => _refreshAllInboxSources(ref),
+                child: visible.isEmpty
+                    ? LayoutBuilder(
+                        builder: (context, constraints) => ListView(
+                          // Still scrollable (not just Center()) so
+                          // pull-to-refresh stays reachable when empty.
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: [
+                            SizedBox(
+                              height: constraints.maxHeight,
+                              child: const EmptyFolderState(
+                                message: 'No messages',
+                              ),
+                            ),
+                          ],
                         ),
+                      )
+                    : ListView.separated(
+                        itemCount: visible.length,
+                        separatorBuilder: (context, index) =>
+                            const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final UnifiedMessage unified = visible[index];
+                          return Slidable(
+                            key: ValueKey(unified.message.id),
+                            startActionPane: _swipeController.buildActionPane(
+                              primary: swipeConfig.leftPrimary,
+                              secondary: swipeConfig.leftSecondary,
+                              account: unified.account,
+                              folder: unified.folder,
+                              message: unified.message,
+                              onRemoved: (id) =>
+                                  setState(() => _pendingRemoval.add(id)),
+                            ),
+                            endActionPane: _swipeController.buildActionPane(
+                              primary: swipeConfig.rightPrimary,
+                              secondary: swipeConfig.rightSecondary,
+                              account: unified.account,
+                              folder: unified.folder,
+                              message: unified.message,
+                              onRemoved: (id) =>
+                                  setState(() => _pendingRemoval.add(id)),
+                            ),
+                            child: MessageListTile(
+                              message: unified.message,
+                              accountColor: accountColorFor(
+                                unified.account.id!,
+                              ),
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => MessageDetailScreen(
+                                    folder: unified.folder,
+                                    message: unified.message,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    );
-                  },
-                ),
               ),
             ),
           ],
@@ -192,7 +241,7 @@ class _UnifiedMessageListState extends ConsumerState<_UnifiedMessageList> {
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) => SyncErrorBanner(
         message: error.toString(),
-        onRetry: () => _invalidateAllInboxSources(ref),
+        onRetry: () => _refreshAllInboxSources(ref),
       ),
     );
   }

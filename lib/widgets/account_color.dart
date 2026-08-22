@@ -18,3 +18,23 @@ const _palette = [
 ];
 
 Color accountColorFor(int accountId) => _palette[accountId.abs() % _palette.length];
+
+/// Same deterministic-palette approach as [accountColorFor], keyed by an
+/// arbitrary string instead of an account id — used to give each message
+/// sender (by email address) a stable avatar color. Shares [_palette] so a
+/// sender's avatar and an account's dot draw from the same visual language.
+///
+/// Uses a hand-rolled hash rather than [String.hashCode]: this mapping is
+/// meant to give a given sender the same color for as long as they email
+/// you, across app upgrades — `hashCode`'s exact algorithm isn't a
+/// documented cross-version guarantee, only that equal strings hash equally
+/// within one run.
+Color senderColorFor(String key) => _palette[_stableHash(key) % _palette.length];
+
+int _stableHash(String input) {
+  var hash = 0;
+  for (final codeUnit in input.codeUnits) {
+    hash = (hash * 31 + codeUnit) & 0x7fffffff;
+  }
+  return hash;
+}

@@ -95,6 +95,37 @@ void main() {
       expect(restored, message);
     });
 
+    test('round-trips fromName through toMap/fromMap', () {
+      final message = MailMessage(
+        id: 12,
+        folderId: 5,
+        uid: 45,
+        subject: 'Hello',
+        from: 'chris@example.com',
+        fromName: 'Chris Quinones',
+        to: 'b@example.com',
+        date: DateTime.utc(2026, 8, 19, 12, 0),
+        snippet: 'Hi there',
+      );
+      final restored = MailMessage.fromMap(message.toMap());
+      expect(restored.fromName, 'Chris Quinones');
+      expect(restored, message);
+    });
+
+    test('fromName defaults to null', () {
+      final message = MailMessage(
+        folderId: 5,
+        uid: 46,
+        subject: 'Hello',
+        from: 'noreply@example.com',
+        to: 'b@example.com',
+        date: DateTime.utc(2026, 8, 19, 12, 0),
+        snippet: 'Hi there',
+      );
+      expect(message.fromName, isNull);
+      expect(MailMessage.fromMap(message.toMap()).fromName, isNull);
+    });
+
     test('isFlagged defaults to false', () {
       final message = MailMessage(
         folderId: 5,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -63,6 +65,40 @@ void main() {
     registerFallbackValue(work);
     registerFallbackValue(workInbox);
     registerFallbackValue(workMessage);
+  });
+
+  testWidgets('shows a friendly empty-state placeholder instead of a blank screen when every '
+      "account's inbox is empty", (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([work])),
+        unifiedInboxProvider.overrideWith((ref) async => []),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: UnifiedInboxScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('No messages'), findsOneWidget);
+    expect(find.byIcon(Icons.inbox_outlined), findsOneWidget);
+  });
+
+  testWidgets('separates message rows with a thin divider when there is more than one',
+      (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([work, personal])),
+        unifiedInboxProvider.overrideWith((ref) async => [
+              UnifiedMessage(message: personalMessage, folder: personalInbox, account: personal),
+              UnifiedMessage(message: workMessage, folder: workInbox, account: work),
+            ]),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: UnifiedInboxScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Divider), findsOneWidget);
   });
 
   testWidgets('renders merged rows from every account, newest first', (tester) async {
@@ -263,5 +299,55 @@ void main() {
     expect(messagesCalls, greaterThan(messagesBefore));
     expect(find.text('From work'), findsOneWidget);
     expect(find.text('From personal'), findsOneWidget);
+  });
+
+  testWidgets(
+      "pull-to-refresh's onRefresh does not resolve until every account's resync actually "
+      'completes (regression: _refreshAllInboxSources used to just fire a batch of '
+      'ref.invalidate() calls and return immediately, before any of the real IMAP fetches they '
+      'trigger had finished)', (tester) async {
+    final resyncCompleter = Completer<List<MailMessage>>();
+    var messagesCallCount = 0;
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([work])),
+        foldersProvider.overrideWith((ref, accountId) async => [workInbox]),
+        messagesProvider.overrideWith((ref, folder) async {
+          messagesCallCount++;
+          // First build (initial load) resolves immediately; the second
+          // (pull-to-refresh's rebuild) stays pending until the test
+          // completes it, so we can observe whether onRefresh's own future
+          // waits for it.
+          if (messagesCallCount == 1) return [workMessage];
+          return resyncCompleter.future;
+        }),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: UnifiedInboxScreen()),
+    ));
+    await tester.pumpAndSettle();
+    expect(messagesCallCount, 1);
+
+    // Call the RefreshIndicator's onRefresh directly rather than driving the
+    // drag gesture — what's under test is whether the future it returns
+    // tracks the real resync, not the indicator's own drag/arm animation.
+    final refreshIndicator = tester.widget<RefreshIndicator>(find.byType(RefreshIndicator));
+    var resolved = false;
+    unawaited(refreshIndicator.onRefresh().then((_) => resolved = true));
+
+    await tester.pump();
+    // The resync has started (messagesProvider rebuilt a second time) but its
+    // future is still pending. Before the fix, onRefresh's returned future
+    // was just the synchronous batch of ref.invalidate() calls — it would
+    // already have resolved by this point regardless.
+    expect(messagesCallCount, 2);
+    expect(resolved, isFalse);
+
+    resyncCompleter.complete([workMessage]);
+    await tester.pump();
+    await tester.pump();
+
+    expect(resolved, isTrue);
   });
 }

@@ -2,7 +2,12 @@ import 'package:flutter/material.dart';
 import '../models/mail_folder.dart';
 
 class FolderTabBar extends StatelessWidget {
-  const FolderTabBar({super.key, required this.folders, required this.selected, required this.onSelect});
+  const FolderTabBar({
+    super.key,
+    required this.folders,
+    required this.selected,
+    required this.onSelect,
+  });
 
   final List<MailFolder> folders;
   final MailFolder? selected;
@@ -17,7 +22,11 @@ class FolderTabBar extends StatelessWidget {
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: ChoiceChip(
-              label: Text(folder.name),
+              label: Badge.count(
+                count: folder.unreadCount,
+                isLabelVisible: folder.unreadCount > 0,
+                child: Text(folder.name),
+              ),
               selected: selected?.id == folder.id,
               onSelected: (_) => onSelect(folder),
             ),

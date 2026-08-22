@@ -40,6 +40,7 @@ class AppDatabase {
         uid INTEGER NOT NULL,
         subject TEXT NOT NULL,
         from_address TEXT NOT NULL,
+        from_name TEXT,
         to_address TEXT NOT NULL,
         date INTEGER NOT NULL,
         snippet TEXT NOT NULL,
@@ -70,6 +71,12 @@ class AppDatabase {
     if (oldVersion < 2) {
       await db.execute('ALTER TABLE messages ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0');
     }
+    if (oldVersion < 3) {
+      // Backs the sender-avatar initials (see widgets/sender_avatar.dart) —
+      // nullable, no DEFAULT needed: existing cached rows simply have no
+      // display name until their next sync re-populates it.
+      await db.execute('ALTER TABLE messages ADD COLUMN from_name TEXT');
+    }
   }
 
   static Future<Database> open() async {
@@ -77,7 +84,7 @@ class AppDatabase {
     final path = p.join(dir.path, 'imap_mail.db');
     return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: onCreate,
       onUpgrade: onUpgrade,
       onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),

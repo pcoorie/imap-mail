@@ -15,6 +15,10 @@ MailMessage mapMimeMessageToRecord(MimeMessage mime, {required int folderId}) {
     uid: mime.uid ?? 0,
     subject: mime.decodeSubject() ?? '(no subject)',
     from: mime.from?.map((a) => a.email).join(', ') ?? '',
+    // Only the primary (first) From address's display name — a message
+    // with multiple From addresses is rare, and the avatar only has room
+    // for one sender's initials anyway.
+    fromName: (mime.from?.isNotEmpty ?? false) ? mime.from!.first.personalName : null,
     to: mime.to?.map((a) => a.email).join(', ') ?? '',
     date: mime.decodeDate() ?? DateTime.now().toUtc(),
     snippet: snippet,
