@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import '../models/enums.dart';
 import '../models/mail_attachment.dart';
 import '../models/mail_folder.dart';
 import '../models/mail_message.dart';
+import '../data/transport/mail_transport.dart';
 import '../providers/account_providers.dart';
+import '../providers/attachment_opener_providers.dart';
+import '../providers/filesystem_providers.dart';
 import '../providers/message_providers.dart';
 import '../providers/repository_providers.dart';
 import '../widgets/attachment_tile.dart';
@@ -66,6 +68,16 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         unawaited(repository
             .markRead(account, widget.folder, resolved, true, revertLocalOnFailure: false)
             .catchError((_) {}));
+      }
+    } on MessageNotFoundException {
+      // The repository already dropped the now-confirmed-gone local row.
+      // Invalidate the folder's list so navigating back doesn't still show
+      // it, and explain what happened rather than leaving a generic error
+      // whose Retry button would just repeat the same "gone" fetch forever.
+      ref.invalidate(messagesProvider(widget.folder));
+      if (mounted) {
+        setState(() => _error =
+            'This message no longer exists — it may have been deleted on another device.');
       }
     } catch (e) {
       if (mounted) {
@@ -132,26 +144,44 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     }
   }
 
-  Future<void> _downloadAttachment(MailAttachment attachment) async {
+  /// Downloads [attachment] if it isn't cached locally yet, then hands it to
+  /// the OS's native preview (see `AttachmentOpener`) — a single tap does
+  /// both, matching Apple Mail. The native preview's own Share/Action button
+  /// is where the user gets "save to Files/Photos/AirDrop", so there's no
+  /// separate save-destination popup here.
+  Future<void> _openAttachment(MailAttachment attachment) async {
     setState(() {
       _downloadingAttachmentId = attachment.id;
       _error = null;
     });
     try {
-      final repository = await ref.read(mailRepositoryProvider.future);
-      final accounts = await ref.read(accountsProvider.future);
-      final account = accounts.firstWhere((a) => a.id == widget.folder.accountId);
-      final bytes = await repository.downloadAttachment(account, widget.folder, widget.message, attachment);
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File(p.join(dir.path, attachment.filename));
-      await file.writeAsBytes(bytes);
-      await repository.recordAttachmentLocalPath(attachment.id!, file.path);
-      if (mounted) {
-        setState(() {
-          _attachments = _attachments
-              .map((a) => a.id == attachment.id ? a.copyWith(localPath: file.path) : a)
-              .toList();
-        });
+      var current = attachment;
+      if (current.localPath == null) {
+        final repository = await ref.read(mailRepositoryProvider.future);
+        final accounts = await ref.read(accountsProvider.future);
+        final account = accounts.firstWhere((a) => a.id == widget.folder.accountId);
+        final bytes = await repository.downloadAttachment(account, widget.folder, widget.message, current);
+        final dir = await ref.read(documentsDirectoryProvider.future);
+        final file = File(p.join(dir.path, current.filename));
+        // Synchronous write, deliberately: attachments are small-to-medium
+        // documents, not multi-gigabyte streams, so blocking briefly here
+        // costs nothing noticeable. The async `writeAsBytes` dispatches to
+        // Dart's IO isolate and waits for it to post back — under a widget
+        // test's fake-async zone that crossing never resolves (the exact
+        // same class of hang this file's own databaseFactoryFfiNoIsolate
+        // comment already documents for sqflite's isolate dispatch).
+        file.writeAsBytesSync(bytes);
+        await repository.recordAttachmentLocalPath(current.id!, file.path);
+        current = current.copyWith(localPath: file.path);
+        if (mounted) {
+          setState(() {
+            _attachments = _attachments.map((a) => a.id == current.id ? current : a).toList();
+          });
+        }
+      }
+      final opened = await ref.read(attachmentOpenerProvider).open(current.localPath!);
+      if (!opened && mounted) {
+        setState(() => _error = 'Could not open ${current.filename} — no app available to view it.');
       }
     } catch (e) {
       if (mounted) {
@@ -246,7 +276,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                     ..._attachments.map((attachment) => AttachmentTile(
                           attachment: attachment,
                           downloading: _downloadingAttachmentId == attachment.id,
-                          onDownload: () => _downloadAttachment(attachment),
+                          onTap: () => _openAttachment(attachment),
                         )),
                   ],
                 )

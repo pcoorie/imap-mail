@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,10 +21,13 @@ import 'package:imap_mail/models/mail_attachment.dart';
 import 'package:imap_mail/models/mail_folder.dart';
 import 'package:imap_mail/models/mail_message.dart';
 import 'package:imap_mail/providers/account_providers.dart';
+import 'package:imap_mail/providers/attachment_opener_providers.dart';
 import 'package:imap_mail/providers/database_providers.dart';
+import 'package:imap_mail/providers/filesystem_providers.dart';
 import 'package:imap_mail/providers/message_providers.dart';
 import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/screens/message_detail_screen.dart';
+import 'package:imap_mail/services/attachment_opener.dart';
 
 class MockMailRepository extends Mock implements MailRepository {}
 
@@ -50,6 +54,7 @@ class _FakeCredentialStore implements SecureCredentialStore {
 /// for every domain type.
 class _FakeMailTransport implements MailTransport {
   bool throwOnFetchBody = false;
+  bool throwMessageNotFoundOnFetchBody = false;
   bool throwOnSetSeen = false;
   int setSeenCallCount = 0;
   int fetchHeadersSinceCallCount = 0;
@@ -81,8 +86,13 @@ class _FakeMailTransport implements MailTransport {
     if (throwOnFetchBody) {
       throw Exception('connection refused');
     }
+    if (throwMessageNotFoundOnFetchBody) {
+      throw MessageNotFoundException(message.uid);
+    }
     throw UnimplementedError('not exercised by this test');
   }
+
+  int fetchAttachmentBytesCallCount = 0;
 
   @override
   Future<List<int>> fetchAttachmentBytes(
@@ -91,8 +101,10 @@ class _FakeMailTransport implements MailTransport {
     MailFolder folder,
     MailMessage message,
     MailAttachment attachment,
-  ) async =>
-      [];
+  ) async {
+    fetchAttachmentBytesCallCount++;
+    return [1, 2, 3];
+  }
 
   @override
   Future<List<MailAttachment>> fetchAttachmentList(
@@ -135,6 +147,19 @@ class _FakeMailTransport implements MailTransport {
     MailFolder destination,
   ) async =>
       null;
+}
+
+class _FakeAttachmentOpener implements AttachmentOpener {
+  _FakeAttachmentOpener({this.succeeds = true});
+
+  final bool succeeds;
+  final List<String> openedPaths = [];
+
+  @override
+  Future<bool> open(String path) async {
+    openedPaths.add(path);
+    return succeeds;
+  }
 }
 
 class _FakeMailSender implements MailSender {
@@ -182,6 +207,18 @@ void main() {
     // isolate avoids the deadlock.
     databaseFactory = databaseFactoryFfiNoIsolate;
   });
+
+  // Attachment-download tests write a real file to documentsDirectoryProvider
+  // (see filesystem_providers.dart — the same "override the provider instead
+  // of touching path_provider" fix as the comment below, just for the
+  // separate getApplicationDocumentsDirectory() call inside
+  // _openAttachment). A fresh temp dir per test avoids collisions between
+  // tests that both write a file named the same thing.
+  late Directory tempDocsDir;
+  setUp(() async {
+    tempDocsDir = await Directory.systemTemp.createTemp('message_detail_screen_test');
+  });
+  tearDown(() => tempDocsDir.delete(recursive: true));
 
   // The real database/accounts provider chain reaches through path_provider
   // and sqflite platform channels, which never settle inside a widget test's
@@ -302,6 +339,106 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.text('invoice.pdf'), findsOneWidget);
+  });
+
+  testWidgets('tapping an attachment that has not been downloaded yet downloads it, then opens it '
+      'via the native preview — no separate save-destination popup', (tester) async {
+    final seed = await seedDatabase(attachments: const [
+      MailAttachment(messageId: 0, filename: 'invoice.pdf', mimeType: 'application/pdf', size: 2048),
+    ]);
+    addTearDown(() => seed.db.close());
+    final transport = _FakeMailTransport();
+    final opener = _FakeAttachmentOpener();
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        databaseProvider.overrideWith((ref) async => seed.db),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(transport),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
+        attachmentOpenerProvider.overrideWithValue(opener),
+        documentsDirectoryProvider.overrideWith((ref) async => tempDocsDir),
+      ],
+      child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.text('invoice.pdf'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(transport.fetchAttachmentBytesCallCount, 1);
+    expect(opener.openedPaths, hasLength(1));
+    expect(opener.openedPaths.single, endsWith('invoice.pdf'));
+
+    final attachments = await AttachmentDao(seed.db).getForMessage(seed.message.id!);
+    expect(attachments.single.localPath, opener.openedPaths.single);
+  });
+
+  testWidgets('tapping an already-downloaded attachment opens it directly, without re-downloading',
+      (tester) async {
+    final seed = await seedDatabase(attachments: const [
+      MailAttachment(
+        messageId: 0,
+        filename: 'invoice.pdf',
+        mimeType: 'application/pdf',
+        size: 2048,
+        localPath: '/already/downloaded/invoice.pdf',
+      ),
+    ]);
+    addTearDown(() => seed.db.close());
+    final transport = _FakeMailTransport();
+    final opener = _FakeAttachmentOpener();
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        databaseProvider.overrideWith((ref) async => seed.db),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(transport),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
+        attachmentOpenerProvider.overrideWithValue(opener),
+      ],
+      child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.text('invoice.pdf'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(transport.fetchAttachmentBytesCallCount, 0);
+    expect(opener.openedPaths, ['/already/downloaded/invoice.pdf']);
+  });
+
+  testWidgets('shows an error when the OS reports no app can open the downloaded attachment',
+      (tester) async {
+    final seed = await seedDatabase(attachments: const [
+      MailAttachment(messageId: 0, filename: 'invoice.weird', mimeType: 'application/x-weird', size: 2048),
+    ]);
+    addTearDown(() => seed.db.close());
+    final opener = _FakeAttachmentOpener(succeeds: false);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        databaseProvider.overrideWith((ref) async => seed.db),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailTransportProvider.overrideWithValue(_FakeMailTransport()),
+        credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
+        attachmentOpenerProvider.overrideWithValue(opener),
+        documentsDirectoryProvider.overrideWith((ref) async => tempDocsDir),
+      ],
+      child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await tester.tap(find.text('invoice.weird'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.textContaining('Could not open'), findsOneWidget);
   });
 
   testWidgets('confirming delete moves the message to Trash and pops back to the folder view', (tester) async {
@@ -476,6 +613,52 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.textContaining('connection refused'), findsOneWidget);
+  });
+
+  testWidgets(
+      'shows a friendly message (not a raw "Bad state: No element") and drops the stale row '
+      'when the message was deleted on another device', (tester) async {
+    final seed = await seedDatabase(downloaded: false);
+    addTearDown(() => seed.db.close());
+    final transport = _FakeMailTransport()..throwMessageNotFoundOnFetchBody = true;
+
+    final container = ProviderContainer(overrides: [
+      databaseProvider.overrideWith((ref) async => seed.db),
+      accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+      mailTransportProvider.overrideWithValue(transport),
+      credentialStoreProvider.overrideWithValue(_FakeCredentialStore()),
+    ]);
+    addTearDown(container.dispose);
+
+    // Warm the messagesProvider cache the way FolderViewScreen would, so we
+    // can later assert it gets invalidated rather than serving the stale
+    // (now-deleted) row forever.
+    await container.read(messagesProvider(seed.folder).future);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(home: MessageDetailScreen(folder: seed.folder, message: seed.message)),
+    ));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // The bug: a bare StateError from `mimeMessages.first` used to surface
+    // here as "Could not load message: Bad state: No element".
+    expect(find.textContaining('Bad state'), findsNothing);
+    expect(
+      find.textContaining('no longer exists'),
+      findsOneWidget,
+    );
+
+    // The now-confirmed-gone local row is dropped, not left to loop forever.
+    final remaining = await MessageDao(seed.db).getById(seed.message.id!);
+    expect(remaining, isNull);
+
+    // messagesProvider is invalidated, so navigating back re-syncs instead
+    // of still showing the deleted message.
+    expect(transport.fetchHeadersSinceCallCount, 1);
+    await container.read(messagesProvider(seed.folder).future);
+    expect(transport.fetchHeadersSinceCallCount, 2);
   });
 
   testWidgets('deleting a message invalidates messagesProvider so the folder view resyncs instead of showing stale data',
