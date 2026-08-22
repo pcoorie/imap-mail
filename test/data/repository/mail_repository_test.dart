@@ -395,6 +395,42 @@ void main() {
     expect(result.bodyText, 'fetched body');
   });
 
+  test(
+      'fetchBodyIfNeeded drops the local row and rethrows when the message was deleted '
+      'on another device (server no longer has the UID)', () async {
+    final folderId = await folderDao.upsert(
+      MailFolder(accountId: accountId, name: 'INBOX', path: 'INBOX', type: MailFolderType.inbox),
+    );
+    final folder = (await folderDao.getById(folderId))!;
+    await messageDao.upsertHeaders([
+      MailMessage(
+        folderId: folderId,
+        uid: 1,
+        subject: 'Subject',
+        from: 'a@example.com',
+        to: 'me@example.com',
+        date: DateTime.utc(2026, 8, 19),
+        snippet: 'snippet',
+        isRead: false,
+      ),
+    ]);
+    final cached = (await messageDao.getForFolder(folderId)).first;
+    // Seed a stale unread count the way a real sync would leave it, so the
+    // post-delete recompute is actually exercised rather than starting at
+    // (and staying at) zero.
+    await folderDao.updateUnreadCount(folderId, 1);
+    when(() => transport.fetchBody(any(), any(), any(), any()))
+        .thenThrow(MessageNotFoundException(cached.uid));
+
+    await expectLater(
+      () => repository.fetchBodyIfNeeded(account, folder, cached),
+      throwsA(isA<MessageNotFoundException>()),
+    );
+
+    expect(await messageDao.getById(cached.id!), isNull);
+    expect((await folderDao.getById(folderId))!.unreadCount, 0);
+  });
+
   test('sendMessage succeeds and caches a sent copy when a Sent folder exists', () async {
     final sentFolderId = await folderDao.upsert(
       MailFolder(accountId: accountId, name: 'Sent', path: 'Sent', type: MailFolderType.sent),

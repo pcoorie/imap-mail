@@ -126,6 +126,13 @@ class EnoughMailTransport implements MailTransport {
         sequence,
         fetchPreference: enough.FetchPreference.full,
       );
+      // An empty result means the UID is no longer in the mailbox — most
+      // commonly because the message was deleted on another device before
+      // this device's cached header row caught up. Without this check,
+      // `.first` throws a bare, unhelpful StateError('No element').
+      if (mimeMessages.isEmpty) {
+        throw MessageNotFoundException(message.uid);
+      }
       return mapMimeMessageToRecord(mimeMessages.first, folderId: folder.id!)
           .copyWith(id: message.id);
     } finally {
@@ -150,6 +157,10 @@ class EnoughMailTransport implements MailTransport {
         sequence,
         fetchPreference: enough.FetchPreference.full,
       );
+      // See fetchBody: an empty result means the UID no longer exists.
+      if (mimeMessages.isEmpty) {
+        throw MessageNotFoundException(message.uid);
+      }
       final mime = mimeMessages.first;
       // Match by decoded filename rather than assuming fetch-id ordering.
       // NOTE: deviates from the brief's `mime.getAttachments()` /
@@ -189,6 +200,10 @@ class EnoughMailTransport implements MailTransport {
         sequence,
         fetchPreference: enough.FetchPreference.full,
       );
+      // See fetchBody: an empty result means the UID no longer exists.
+      if (mimeMessages.isEmpty) {
+        throw MessageNotFoundException(message.uid);
+      }
       return mapMimeMessageAttachments(mimeMessages.first, messageId: message.id!);
     } finally {
       await client.disconnect();

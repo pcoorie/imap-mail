@@ -3,6 +3,24 @@ import '../../models/mail_attachment.dart';
 import '../../models/mail_folder.dart';
 import '../../models/mail_message.dart';
 
+/// Thrown by [MailTransport] methods that fetch a specific message by UID
+/// (its body, or its attachment list/bytes) when the server no longer has
+/// any message under that UID. This is the expected shape of "deleted (or
+/// expunged) from another client before this device's cached header row
+/// caught up" — not a transport failure — so callers can react to it
+/// distinctly (e.g. drop the now-stale local row) instead of it surfacing
+/// as an opaque low-level error.
+class MessageNotFoundException implements Exception {
+  const MessageNotFoundException(this.uid);
+
+  /// The UID that no longer exists in the selected mailbox.
+  final int uid;
+
+  @override
+  String toString() => 'MessageNotFoundException: no message with UID $uid found on the server '
+      '(it may have been deleted on another device)';
+}
+
 abstract class MailTransport {
   Future<void> testConnection(MailAccount account, String password);
 

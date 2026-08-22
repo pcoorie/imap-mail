@@ -133,17 +133,28 @@ class MailRepository {
       return current;
     }
     final password = await _passwordFor(account);
-    final fetched = await _transport.fetchBody(account, password, folder, current);
-    await _messageDao.updateBody(
-      current.id!,
-      bodyText: fetched.bodyText,
-      bodyHtml: fetched.bodyHtml,
-    );
-    final attachments = await _transport.fetchAttachmentList(account, password, folder, current);
-    if (attachments.isNotEmpty) {
-      await _attachmentDao.insertAll(attachments);
+    try {
+      final fetched = await _transport.fetchBody(account, password, folder, current);
+      await _messageDao.updateBody(
+        current.id!,
+        bodyText: fetched.bodyText,
+        bodyHtml: fetched.bodyHtml,
+      );
+      final attachments = await _transport.fetchAttachmentList(account, password, folder, current);
+      if (attachments.isNotEmpty) {
+        await _attachmentDao.insertAll(attachments);
+      }
+      return fetched;
+    } on MessageNotFoundException {
+      // Confirmed gone from the server — deleted (or expunged) on another
+      // device before this device's cached header row caught up. The local
+      // row is now permanently stale: drop it so a Retry (or reopening the
+      // folder) doesn't keep hitting the same "gone" fetch forever, and so
+      // the folder's unread count doesn't stay off if it was unread.
+      await _messageDao.deleteMessage(current.id!);
+      await _refreshUnreadCount(folder.id!);
+      rethrow;
     }
-    return fetched;
   }
 
   /// Moves [message] from [from] to [to], locally and on the server.
