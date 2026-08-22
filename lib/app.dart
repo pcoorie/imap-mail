@@ -10,6 +10,18 @@ import 'screens/folder_view_screen.dart';
 
 const _brandSeed = Color(0xFF0A5BD6);
 
+/// A light, on-brand colored header for every screen's app bar (Outlook's
+/// blue-header look, without matching its full saturation — the design spec
+/// this app is going for calls for something lighter). `primaryContainer` is
+/// Material 3's own "light tint of the seed color" tone — already the exact
+/// same blue as the app icon (`_brandSeed`), just pastel — so this reuses it
+/// rather than hand-picking a new color that would need separate light/dark
+/// variants and could drift from the icon's blue over time.
+AppBarTheme _appBarTheme(ColorScheme scheme) => AppBarTheme(
+      backgroundColor: scheme.primaryContainer,
+      foregroundColor: scheme.onPrimaryContainer,
+    );
+
 class ImapMailApp extends ConsumerStatefulWidget {
   const ImapMailApp({super.key});
 
@@ -42,19 +54,20 @@ class _ImapMailAppState extends ConsumerState<ImapMailApp> {
   @override
   Widget build(BuildContext context) {
     final themeMode = ref.watch(themeModeProvider);
+    final lightScheme = ColorScheme.fromSeed(seedColor: _brandSeed);
+    final darkScheme = ColorScheme.fromSeed(seedColor: _brandSeed, brightness: Brightness.dark);
     return MaterialApp(
       title: 'Cobalt Mail',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: _brandSeed),
+        colorScheme: lightScheme,
         useMaterial3: true,
+        appBarTheme: _appBarTheme(lightScheme),
       ),
       darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: _brandSeed,
-          brightness: Brightness.dark,
-        ),
+        colorScheme: darkScheme,
         useMaterial3: true,
+        appBarTheme: _appBarTheme(darkScheme),
       ),
       themeMode: themeMode,
       home: Consumer(
