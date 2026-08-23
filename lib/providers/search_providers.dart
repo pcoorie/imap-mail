@@ -3,6 +3,7 @@ import '../models/mail_message.dart';
 import '../models/unified_message.dart';
 import 'account_providers.dart';
 import 'repository_providers.dart';
+import 'sync_status_providers.dart';
 
 /// Matches [query] (case-insensitive substring) against a message's
 /// subject, sender name, sender address, or snippet — the fields already
@@ -26,7 +27,14 @@ bool _matches(MailMessage message, String query) {
 /// live server search. A blank/whitespace-only query short-circuits to `[]`
 /// without touching the repository at all, so an empty search field never
 /// triggers N accounts' worth of local DB reads for nothing.
-final searchResultsProvider = FutureProvider.family<List<UnifiedMessage>, String>((ref, query) async {
+final searchResultsProvider = FutureProvider.autoDispose.family<List<UnifiedMessage>, String>((ref, query) async {
+  // Re-run whenever anything bumps this tick — every swipe action
+  // (archive/delete/flag/toggleRead) and every messagesProvider sync
+  // already does, via MessageSwipeController.performSwipeAction. Without
+  // this, search results would be frozen at whatever the cache looked
+  // like the first time a given query string was searched, for the life
+  // of the app — see totalUnreadCountProvider for the same pattern.
+  ref.watch(unreadCountRefreshTickProvider);
   final trimmed = query.trim();
   if (trimmed.isEmpty) return const [];
   final repository = await ref.watch(mailRepositoryProvider.future);

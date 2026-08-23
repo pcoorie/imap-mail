@@ -96,16 +96,17 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   }
 
   Widget _buildBody(SwipeActionConfig swipeConfig) {
-    if (_query.trim().isEmpty) {
+    final trimmedQuery = _query.trim();
+    if (trimmedQuery.isEmpty) {
       return const EmptyFolderState(message: 'Search your mail');
     }
-    final resultsAsync = ref.watch(searchResultsProvider(_query));
+    final resultsAsync = ref.watch(searchResultsProvider(trimmedQuery));
     return resultsAsync.when(
       data: (results) {
         _pendingRemoval.retainAll(results.map((u) => u.message.id).whereType<int>());
         final visible = results.where((u) => !_pendingRemoval.contains(u.message.id)).toList();
         if (visible.isEmpty) {
-          return EmptyFolderState(message: 'No results for "$_query"');
+          return EmptyFolderState(message: 'No results for "$trimmedQuery"');
         }
         return ListView.separated(
           itemCount: visible.length,
