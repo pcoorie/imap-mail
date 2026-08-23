@@ -1,22 +1,21 @@
-"""Generate the "Riveted Armor Plate" app icon — a gunmetal/cobalt diagonal
-background, a raised riveted metal panel, and the same white envelope glyph
-the app has always used, now clad in armor. Chosen from four metal/armor
-concept directions explored on a design canvas (see
-docs/superpowers/specs — this replaces the earlier flat two-tone blue
-envelope) to symbolize the app's strength/security/privacy themes.
+"""Generate the "Lock-Seal Envelope" app icon — the same envelope glyph the
+app has always used, on a cobalt-blue diagonal sweep, with its flap
+replaced by a brushed-silver keyhole: the mail is sealed/locked, a simple,
+literal read on the app's strength/security/privacy themes. Chosen (over a
+riveted-armor-plate direction that read as too busy at small sizes) from
+four metal/armor concept directions explored on a design canvas.
 
-iOS 26 ("Liquid Glass") guidance baked in (carried over from the previous
-generator):
+iOS 26 ("Liquid Glass") guidance baked in (carried over from every prior
+version of this generator):
   - Fully opaque, no alpha channel (transparency is disallowed/ignored on iOS 18+).
   - Full-bleed square, no manual corner rounding — the OS applies its own
     squircle mask and the Liquid Glass specular/refraction sweep on top.
   - Generous safe-area padding so the glyph isn't clipped by the more
     aggressive corner mask or washed out by the edge highlight.
   - Bold, simple geometry with strong contrast so it still reads clearly
-    under the glass sheen — and, just as important here, at actual
-    home-screen size: the "armor" reads as gradient shading and a few
-    rivets, not fine brushed-metal texture, which turns to mud once the
-    icon is shrunk past ~60px.
+    under the glass sheen, and at actual home-screen size — this direction
+    was picked specifically for reading as "simple" next to the other,
+    busier armor-plate concept.
 """
 from pathlib import Path
 
@@ -32,79 +31,69 @@ def _hex(color: str) -> tuple[int, int, int]:
     return tuple(int(color[i : i + 2], 16) for i in (0, 2, 4))
 
 
-def diagonal_gradient(size: tuple[int, int], start: str, end: str, origin: tuple[int, int] = (0, 0)) -> np.ndarray:
-    """An (h, w, 3) uint8 array, linearly interpolated along the (1, 1)
-    diagonal from `start` at `origin` to `end` at `origin + size` — the same
-    gradient vector `<linearGradient x1 y1 x2 y2>` describes when x2-x1 ==
-    y2-y1 (every gradient in the source design is exactly this diagonal).
+def linear_gradient(
+    size: tuple[int, int],
+    stops: list[tuple[float, str]],
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+) -> np.ndarray:
+    """An (h, w, 3) uint8 array: a multi-stop linear gradient over the full
+    canvas, projected onto the vector from `p0` to `p1` — the same geometry
+    a `<linearGradient x1 y1 x2 y2>` describes. `stops` is `[(offset, hex),
+    ...]` with offsets in [0, 1], sorted ascending (matches SVG `<stop
+    offset>` semantics).
     """
     w, h = size
-    start_rgb = np.array(_hex(start), dtype=np.float64)
-    end_rgb = np.array(_hex(end), dtype=np.float64)
+    p0 = np.array(p0, dtype=np.float64)
+    p1 = np.array(p1, dtype=np.float64)
+    axis = p1 - p0
+    length_sq = float(axis @ axis)
     xs, ys = np.meshgrid(np.arange(w), np.arange(h))
-    t = ((xs + ys) / (2 * max(w + h - 2, 1))).clip(0, 1)
-    t = t[..., None]
-    grad = start_rgb * (1 - t) + end_rgb * t
-    return grad.astype(np.uint8)
+    px = np.stack([xs, ys], axis=-1).astype(np.float64) - p0
+    t = (px @ axis / length_sq).clip(0, 1)
+
+    result = np.zeros((h, w, 3), dtype=np.float64)
+    for (off0, color0), (off1, color1) in zip(stops, stops[1:]):
+        seg = (t >= off0) & (t <= off1)
+        local_t = ((t - off0) / (off1 - off0))[..., None]
+        c0, c1 = np.array(_hex(color0)), np.array(_hex(color1))
+        blended = c0 * (1 - local_t) + c1 * local_t
+        result = np.where(seg[..., None], blended, result)
+    return result.astype(np.uint8)
 
 
-def rounded_rect_mask(size: tuple[int, int], box: tuple[int, int, int, int], radius: int) -> Image.Image:
-    mask = Image.new("L", size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle(box, radius=radius, fill=255)
-    return mask
-
-
-def radial_gradient_patch(diameter: int, inner: str, outer: str, focal_offset: tuple[float, float]) -> Image.Image:
-    """A small square RGBA patch: a radial gradient circle of `diameter`,
-    focal point offset from center by `focal_offset` (fraction of radius,
-    matching the source design's `radialGradient cx="35%" cy="30%"` — a
-    light source from the upper-left, the standard "embossed rivet" cue).
+def diagonal_highlight_band(size: int, angle_deg: float, y0: int, height: int, opacity: float) -> Image.Image:
+    """A soft white diagonal band (RGBA), rotated about the canvas center —
+    matches the source design's low-opacity diagonal "sheen" sweep across
+    the background.
     """
-    r = diameter / 2
-    inner_rgb = np.array(_hex(inner), dtype=np.float64)
-    outer_rgb = np.array(_hex(outer), dtype=np.float64)
-    xs, ys = np.meshgrid(np.arange(diameter), np.arange(diameter))
-    fx, fy = r + focal_offset[0] * r, r + focal_offset[1] * r
-    dist = np.sqrt((xs - fx) ** 2 + (ys - fy) ** 2)
-    t = (dist / (r * 0.85)).clip(0, 1)[..., None]
-    rgb = (inner_rgb * (1 - t) + outer_rgb * t).astype(np.uint8)
-    circle_mask = np.sqrt((xs - r) ** 2 + (ys - r) ** 2) <= r
-    rgba = np.dstack([rgb, np.where(circle_mask, 255, 0).astype(np.uint8)])
-    return Image.fromarray(rgba)
+    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rectangle(
+        [-size // 2, y0, size + size // 2, y0 + height],
+        fill=(255, 255, 255, round(255 * opacity)),
+    )
+    return layer.rotate(angle_deg, center=(size / 2, size / 2), resample=Image.BICUBIC)
 
 
 def main() -> None:
-    # Background: gunmetal-to-cobalt diagonal sweep.
-    bg = diagonal_gradient((SIZE, SIZE), "#0F1B2E", "#0A5BD6")
+    # Background: cobalt-blue diagonal sweep (three stops — darker, brand
+    # blue, lighter — for a gentle metallic gradation rather than a flat fill).
+    bg = linear_gradient(
+        (SIZE, SIZE),
+        [(0.0, "#06409E"), (0.55, "#0A5BD6"), (1.0, "#1568E0")],
+        (0, 0),
+        (SIZE, SIZE),
+    )
     img = Image.fromarray(bg).convert("RGBA")
 
-    # Riveted panel — a raised metal plate filling most of the safe area.
-    panel_box = (140, 140, 140 + 744, 140 + 744)
-    panel_grad = diagonal_gradient((744, 744), "#4A6480", "#1E2E40")
-    panel_layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    panel_layer.paste(Image.fromarray(panel_grad), (140, 140))
-    panel_mask = rounded_rect_mask((SIZE, SIZE), panel_box, radius=64)
-    img = Image.composite(panel_layer, img, panel_mask)
-
-    # Inset highlight border — suggests the panel's raised bevel edge.
-    border_layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-    ImageDraw.Draw(border_layer).rounded_rectangle(
-        (172, 172, 172 + 680, 172 + 680),
-        radius=48,
-        outline=(143, 166, 188, int(255 * 0.35)),
-        width=4,
-    )
-    img = Image.alpha_composite(img, border_layer)
-
-    # Four corner rivets, each a small embossed radial-gradient bead.
-    rivet_d = 44  # 2 * r=22
-    rivet_patch = radial_gradient_patch(rivet_d, "#B9C6D2", "#5A6B7A", focal_offset=(-0.30, -0.40))
-    for cx, cy in [(212, 212), (812, 212), (212, 812), (812, 812)]:
-        img.alpha_composite(rivet_patch, (cx - rivet_d // 2, cy - rivet_d // 2))
+    # A single soft diagonal highlight sweep — a hint of polish, not a
+    # texture (see the design spec's note on fine brush-texture vanishing
+    # at small icon sizes).
+    highlight = diagonal_highlight_band(SIZE, angle_deg=-22, y0=120, height=80, opacity=0.14)
+    img = Image.alpha_composite(img, highlight)
 
     # Envelope glyph — unchanged geometry from every prior version of this
-    # icon, kept flat/opaque (not metallic) so it stays the clearest, most
-    # legible element against the armored backdrop.
+    # icon.
     draw = ImageDraw.Draw(img)
     body_w, body_h = 620, 420
     left = (SIZE - body_w) // 2
@@ -115,8 +104,18 @@ def main() -> None:
     white = (244, 246, 248, 255)
     draw.rounded_rectangle([left, top, right, bottom], radius=radius, fill=white, corners=(False, False, True, True))
     draw.rectangle([left, top, right, top + radius], fill=white)
-    apex_y = top + 190
-    draw.polygon([(left, top), (right, top), ((left + right) // 2, apex_y)], fill=(6, 64, 158, 255))
+
+    # Lock-seal: the flap is replaced by a keyhole silhouette (a circle over
+    # a tapered keyway) in a brushed-silver gradient — "sealed", not just
+    # folded shut.
+    silver = linear_gradient((SIZE, SIZE), [(0.0, "#E6EAEF"), (1.0, "#8C99A6")], (440, 400), (590, 600))
+    silver_img = Image.fromarray(silver).convert("RGBA")
+
+    keyhole_mask = Image.new("L", (SIZE, SIZE), 0)
+    kd = ImageDraw.Draw(keyhole_mask)
+    kd.ellipse([512 - 62, 470 - 62, 512 + 62, 470 + 62], fill=255)
+    kd.polygon([(478, 486), (546, 486), (521, 588), (503, 588)], fill=255)
+    img = Image.composite(silver_img, img, keyhole_mask)
 
     out_path = REPO_ROOT / "assets" / "icon" / "app_icon.png"
     img = img.convert("RGB")
