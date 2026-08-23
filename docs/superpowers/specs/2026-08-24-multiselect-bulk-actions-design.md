@@ -16,8 +16,8 @@ left-aligned selection checkbox.
 - Bulk delete and bulk move reuse the existing single-message
   optimistic-move/revert semantics in `MailRepository`, batched over one IMAP
   connection instead of one connection per message.
-- A single Undo action reverts the whole batch, mirroring the existing
-  per-message undo snackbar.
+- A summary snackbar reports the outcome; no Undo for bulk actions (see
+  Non-Goals) — find a bulk-moved message by visiting the destination folder.
 
 ## Non-Goals (this iteration)
 
@@ -27,6 +27,12 @@ left-aligned selection checkbox.
 - Bulk mark read/unread, flag/unflag, or archive. Only Trash and Move ship
   now; the action-bar structure should not preclude adding these later.
 - Drag-to-reorder or any multi-folder drag-and-drop.
+- **Undo for bulk actions.** Unlike the existing per-message swipe
+  undo, a bulk Trash/move is final once dispatched — if someone needs a
+  message back, they find it in Trash or the destination folder and move
+  it manually. Simpler code (no bulk-undo snackbar, no re-fetch-fresh-copy
+  dance for a whole batch) and avoids the ambiguity of "undo" over a batch
+  where some messages may not be undoable at all (no UIDPLUS on the move).
 
 ## UX Design
 
@@ -136,10 +142,10 @@ Future<BulkResult> deleteMessages(
 ```
 
 `BulkResult` carries, per message, either the moved/deleted `MailMessage`
-(for undo) or the error — keyed by message **id** (`int`), not by
-`MailMessage` value equality (`MailMessage extends Equatable` over all its
-fields, so the pre- and post-move copies of the same message compare
-unequal and can't be used as the same map key): e.g.
+(for the summary snackbar's counts) or the error — keyed by message **id**
+(`int`), not by `MailMessage` value equality (`MailMessage extends
+Equatable` over all its fields, so the pre- and post-move copies of the
+same message compare unequal and can't be used as the same map key): e.g.
 `{List<MailMessage> succeeded, Map<int, Object> failed}`.
 
 Each method performs the *same* per-message optimistic-local-then-server
@@ -190,25 +196,18 @@ the folder currently being viewed), reusing the same `folders` data
 for v1 — no need to reuse `FolderTreeExpander`'s nested-tree rendering
 unless the account has meaningfully deep folder nesting.
 
-## Undo & Partial Failure Handling
+## Partial Failure Handling
 
 - Bulk actions **proceed and report**, not all-or-nothing: a message that
   fails (offline mid-batch, server error) is reverted individually (same as
   today's single-message revert-on-failure) while the rest of the batch
   continues.
-- One summary snackbar after the batch completes:
-  - All succeeded: `"12 moved to Trash"` / `"12 moved to Archive"`, with
-    **Undo**.
-  - Partial: `"10 moved, 2 failed"`, with **Undo** (undoes only the 10 that
-    succeeded — nothing to undo for the 2 that never moved).
-  - All failed: `"Couldn't move 12 messages"`, no Undo, matches today's
+- One summary snackbar after the batch completes, no Undo action on any of
+  them (see Non-Goals):
+  - All succeeded: `"12 moved to Trash"` / `"12 moved to Archive"`.
+  - Partial: `"10 moved, 2 failed"`.
+  - All failed: `"Couldn't move 12 messages"` — matches today's
     error-snackbar tone for a single failed action.
-- **Undo** loops `moveMessage` (or the new batched `moveMessages`) back to
-  the original folder for exactly the succeeded subset, reusing the
-  existing `canUndo` (uid ≥ 0) guard per message — some messages in a
-  batch may be undoable and others not (no UIDPLUS on the move), so undo
-  itself is also proceed-and-report, silently skipping non-undoable ones
-  rather than surfacing a second layer of partial-failure UI.
 - Selection mode exits automatically once the bulk action is dispatched
   (don't wait for it to finish) — same "fire the action, get instant UI
   feedback" feel as the existing single-swipe actions.
@@ -231,8 +230,8 @@ unless the account has meaningfully deep folder nesting.
   partial failure (one message's server call throws), Trash-fallback
   delegation, and that only one transport connection is opened per batch
   (mock/fake transport asserting call count).
-- Widget tests for the bulk undo snackbar text (all/partial/none) and that
-  Undo only reverts the succeeded subset.
+- Widget tests for the summary snackbar text (all/partial/all-failed) and
+  that it never offers an Undo action.
 
 ## Open Questions — resolved
 
@@ -241,3 +240,5 @@ unless the account has meaningfully deep folder nesting.
   connection rather than reconnecting per message. *(resolved)*
 - Select All: deferred, not in this iteration. *(resolved)*
 - Partial failure: proceed-and-report, not all-or-nothing. *(resolved)*
+- Undo: no bulk undo this iteration — manual recovery via Trash/destination
+  folder. *(resolved)*
