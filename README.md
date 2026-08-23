@@ -14,6 +14,7 @@ Most consumer mail apps either force you through a provider's OAuth flow or funn
 - **Full folder access** — Inbox, Sent, and Trash front and center, with every other folder your server reports (Archive, custom labels, etc.) one tap away.
 - **Compose, reply, and forward**, with file attachments, sent straight over SMTP.
 - **Swipeable triage actions** — swipe a message to archive, delete, flag, or mark read/unread. Every slot is customizable in Settings, and every action writes back to the server, not just the local cache.
+- **Global search** — one search box finds a message by subject, sender, or snippet across every folder of every account at once.
 
 ### Attachments that behave
 - Tap an attachment to download it and open it straight in your device's native preview — the same viewer Apple Mail itself uses for PDFs, Word docs, images, and more.
@@ -38,7 +39,6 @@ This is a v1 built around a clear set of tradeoffs, not a feature-complete clien
 
 - No push notifications or background sync — mail updates when the app is open, by design (no server-side infrastructure, no battery drain from a background service).
 - No OAuth providers (Gmail API, Microsoft Graph) — IMAP/SMTP only, by choice.
-- No in-app search yet — planned as a fast-follow.
 - No message threading — a flat, chronological list.
 
 ## Tech

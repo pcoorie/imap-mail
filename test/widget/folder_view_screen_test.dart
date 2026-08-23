@@ -18,6 +18,7 @@ import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/providers/swipe_action_providers.dart';
 import 'package:imap_mail/providers/theme_providers.dart';
 import 'package:imap_mail/screens/folder_view_screen.dart';
+import 'package:imap_mail/screens/search_screen.dart';
 import 'package:imap_mail/screens/settings_screen.dart';
 
 class _FakeAccountsNotifier extends AccountsNotifier {
@@ -677,5 +678,23 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.byType(CircularProgressIndicator), findsWidgets);
+  });
+
+  testWidgets('the app bar search icon opens SearchScreen', (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async => const []),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SearchScreen), findsOneWidget);
   });
 }

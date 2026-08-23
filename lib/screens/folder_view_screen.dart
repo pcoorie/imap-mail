@@ -19,6 +19,7 @@ import '../widgets/sync_error_banner.dart';
 import 'account_form_screen.dart';
 import 'compose_screen.dart';
 import 'message_detail_screen.dart';
+import 'search_screen.dart';
 import 'settings_screen.dart';
 
 class FolderViewScreen extends ConsumerStatefulWidget {
@@ -42,6 +43,12 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
       appBar: AppBar(
         title: const Text('Mail'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const SearchScreen())),
+          ),
           // Single-account routing (app.dart) skips AccountListScreen
           // entirely — its gear icon was the only path to SettingsScreen,
           // so a single-account user would otherwise have no way to reach
