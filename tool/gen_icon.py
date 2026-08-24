@@ -1,9 +1,12 @@
-"""Generate the "Lock-Seal Envelope" app icon — the same envelope glyph the
-app has always used, on a cobalt-blue diagonal sweep, with its flap
-replaced by a brushed-silver keyhole: the mail is sealed/locked, a simple,
-literal read on the app's strength/security/privacy themes. Chosen (over a
-riveted-armor-plate direction that read as too busy at small sizes) from
-four metal/armor concept directions explored on a design canvas.
+"""Generate the "Brushed Steel Envelope" app icon — a dark slate-blue-gray
+diagonal background, the same white envelope glyph the app has always used,
+now with a brushed-steel triangular flap (a classic sealed-letter silhouette
+rendered in metal) and a small blue riveted seal at the flap's point.
+Chosen from four metal/armor concept directions explored on a design canvas
+— a middle ground between the earlier "Riveted Armor Plate" (too busy at
+small sizes) and "Lock-Seal Envelope" (no flap at all) directions: a
+familiar envelope shape, metal-clad, with one clear accent rivet instead of
+a busy panel.
 
 iOS 26 ("Liquid Glass") guidance baked in (carried over from every prior
 version of this generator):
@@ -13,9 +16,9 @@ version of this generator):
   - Generous safe-area padding so the glyph isn't clipped by the more
     aggressive corner mask or washed out by the edge highlight.
   - Bold, simple geometry with strong contrast so it still reads clearly
-    under the glass sheen, and at actual home-screen size — this direction
-    was picked specifically for reading as "simple" next to the other,
-    busier armor-plate concept.
+    under the glass sheen, and at actual home-screen size — a gradient-clad
+    flap and one accent rivet, not fine brushed-metal texture, which turns
+    to mud once the icon is shrunk past ~60px.
 """
 from pathlib import Path
 
@@ -75,24 +78,46 @@ def diagonal_highlight_band(size: int, angle_deg: float, y0: int, height: int, o
     return layer.rotate(angle_deg, center=(size / 2, size / 2), resample=Image.BICUBIC)
 
 
+def radial_gradient_patch(diameter: int, inner: str, outer: str, focal_offset: tuple[float, float]) -> Image.Image:
+    """A small square RGBA patch: a radial gradient circle of `diameter`,
+    focal point offset from center by `focal_offset` (fraction of radius,
+    matching the source design's `radialGradient cx="35%" cy="30%"` — a
+    light source from the upper-left, the standard "embossed rivet" cue).
+    """
+    r = diameter / 2
+    inner_rgb = np.array(_hex(inner), dtype=np.float64)
+    outer_rgb = np.array(_hex(outer), dtype=np.float64)
+    xs, ys = np.meshgrid(np.arange(diameter), np.arange(diameter))
+    fx, fy = r + focal_offset[0] * r, r + focal_offset[1] * r
+    dist = np.sqrt((xs - fx) ** 2 + (ys - fy) ** 2)
+    t = (dist / (r * 0.85)).clip(0, 1)[..., None]
+    rgb = (inner_rgb * (1 - t) + outer_rgb * t).astype(np.uint8)
+    circle_mask = np.sqrt((xs - r) ** 2 + (ys - r) ** 2) <= r
+    rgba = np.dstack([rgb, np.where(circle_mask, 255, 0).astype(np.uint8)])
+    return Image.fromarray(rgba)
+
+
 def main() -> None:
-    # Background: cobalt-blue diagonal sweep (three stops — darker, brand
-    # blue, lighter — for a gentle metallic gradation rather than a flat fill).
+    # Background: dark slate-blue-gray diagonal sweep (three stops, darkest
+    # at the top-left corner) — cooler and darker than the cobalt-blue
+    # backgrounds of the earlier two directions, to let the brushed-steel
+    # flap read as the icon's focal metal element rather than compete with
+    # a bright blue field.
     bg = linear_gradient(
         (SIZE, SIZE),
-        [(0.0, "#06409E"), (0.55, "#0A5BD6"), (1.0, "#1568E0")],
+        [(0.0, "#101B2C"), (0.55, "#2C4560"), (1.0, "#5B7B99")],
         (0, 0),
         (SIZE, SIZE),
     )
     img = Image.fromarray(bg).convert("RGBA")
 
-    # A single soft diagonal highlight sweep — a hint of polish, not a
-    # texture (see the design spec's note on fine brush-texture vanishing
-    # at small icon sizes).
-    highlight = diagonal_highlight_band(SIZE, angle_deg=-22, y0=120, height=80, opacity=0.14)
-    img = Image.alpha_composite(img, highlight)
+    # Two soft diagonal highlight sweeps (a hint of polish, not a texture —
+    # see the design spec's note on fine brush-texture vanishing at small
+    # icon sizes) — matches the source design's pair of overlay bands.
+    for y0, height in [(120, 90), (640, 60)]:
+        img = Image.alpha_composite(img, diagonal_highlight_band(SIZE, angle_deg=-22, y0=y0, height=height, opacity=0.16))
 
-    # Envelope glyph — unchanged geometry from every prior version of this
+    # Envelope body — unchanged geometry from every prior version of this
     # icon.
     draw = ImageDraw.Draw(img)
     body_w, body_h = 620, 420
@@ -105,17 +130,38 @@ def main() -> None:
     draw.rounded_rectangle([left, top, right, bottom], radius=radius, fill=white, corners=(False, False, True, True))
     draw.rectangle([left, top, right, top + radius], fill=white)
 
-    # Lock-seal: the flap is replaced by a keyhole silhouette (a circle over
-    # a tapered keyway) in a brushed-silver gradient — "sealed", not just
-    # folded shut.
-    silver = linear_gradient((SIZE, SIZE), [(0.0, "#E6EAEF"), (1.0, "#8C99A6")], (440, 400), (590, 600))
-    silver_img = Image.fromarray(silver).convert("RGBA")
+    # Brushed-steel flap: a classic triangular envelope flap, filled with a
+    # diagonal steel gradient (light upper-left to dark lower-right) rather
+    # than a flat color — the "brushed steel" of the icon's name — with a
+    # subtle dark seam stroke tracing its fold lines.
+    apex_y = top + 190
+    flap_mask = Image.new("L", (SIZE, SIZE), 0)
+    ImageDraw.Draw(flap_mask).polygon([(left, top), (right, top), ((left + right) // 2, apex_y)], fill=255)
+    flap_grad = linear_gradient((SIZE, SIZE), [(0.0, "#8896A3"), (1.0, "#3F4B57")], (left, top), (right, apex_y))
+    img = Image.composite(Image.fromarray(flap_grad).convert("RGBA"), img, flap_mask)
 
-    keyhole_mask = Image.new("L", (SIZE, SIZE), 0)
-    kd = ImageDraw.Draw(keyhole_mask)
-    kd.ellipse([512 - 62, 470 - 62, 512 + 62, 470 + 62], fill=255)
-    kd.polygon([(478, 486), (546, 486), (521, 588), (503, 588)], fill=255)
-    img = Image.composite(silver_img, img, keyhole_mask)
+    seam_layer = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    ImageDraw.Draw(seam_layer).line(
+        [(left, top), ((left + right) // 2, apex_y), (right, top)],
+        fill=(22, 33, 44, round(255 * 0.35)),
+        width=6,
+        joint="curve",
+    )
+    img = Image.alpha_composite(img, seam_layer)
+
+    # Riveted seal at the flap's point — a small embossed radial-gradient
+    # bead in the app's cobalt blue, with a white specular highlight dot.
+    rivet_d = 52  # 2 * r=26
+    rivet_cx, rivet_cy = (left + right) // 2, apex_y
+    rivet_patch = radial_gradient_patch(rivet_d, "#3E8CF0", "#06409E", focal_offset=(-0.30, -0.40))
+    img.alpha_composite(rivet_patch, (rivet_cx - rivet_d // 2, rivet_cy - rivet_d // 2))
+
+    specular = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    ImageDraw.Draw(specular).ellipse(
+        [rivet_cx - 17, rivet_cy - 17, rivet_cx - 1, rivet_cy - 1],
+        fill=(255, 255, 255, round(255 * 0.55)),
+    )
+    img = Image.alpha_composite(img, specular)
 
     out_path = REPO_ROOT / "assets" / "icon" / "app_icon.png"
     img = img.convert("RGB")
