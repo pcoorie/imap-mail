@@ -843,6 +843,32 @@ void main() {
       expect(find.text('Mail'), findsOneWidget);
     });
 
+    testWidgets('a bulk-delete call that throws reports the failure instead of crashing', (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.deleteMessages(any(), any(), any()))
+          .thenThrow(Exception('offline'));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining("Couldn't delete"), findsOneWidget);
+    });
+
     testWidgets('the bulk delete summary snackbar never offers an Undo action', (tester) async {
       final repository = MockMailRepository();
       when(() => repository.deleteMessages(any(), any(), any()))

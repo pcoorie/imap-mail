@@ -96,12 +96,25 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
     if (selected.isEmpty) return;
     final account = _findAccount();
     if (account == null) return;
-    final repository = await ref.read(mailRepositoryProvider.future);
-    final result = await repository.deleteMessages(account, folder, selected);
-    if (!mounted) return;
-    ref.invalidate(messagesProvider(folder));
-    ref.read(unreadCountRefreshTickProvider.notifier).state++;
-    _showBulkResultSnackBar(result, verb: 'moved to Trash');
+    try {
+      final repository = await ref.read(mailRepositoryProvider.future);
+      final result = await repository.deleteMessages(account, folder, selected);
+      if (!mounted) return;
+      ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
+      _showBulkResultSnackBar(result, verb: 'moved to Trash');
+    } catch (e) {
+      if (!mounted) return;
+      // Match performSwipeAction's catch block: refresh the list/unread count
+      // even on failure, since the repository call may have partially
+      // committed local DB changes before the error was thrown.
+      ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger == null) return;
+      messenger.clearSnackBars();
+      messenger.showSnackBar(SnackBar(content: Text("Couldn't delete — $e")));
+    }
   }
 
   PreferredSizeWidget _buildDefaultAppBar() {
