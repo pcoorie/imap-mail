@@ -1090,5 +1090,35 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.textContaining("Couldn't move"), findsOneWidget);
     });
+
+    testWidgets('bulk-deleting while already viewing Trash reports "deleted", not "moved to Trash" (permanent removal)',
+        (tester) async {
+      final repository = MockMailRepository();
+      final trashMessage = message.copyWith(folderId: trash.id!);
+      when(() => repository.deleteMessages(any(), any(), any()))
+          .thenAnswer((_) async => BulkResult(succeeded: [trashMessage], failed: const {}));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == trash.id ? [trashMessage] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Trash'));
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('deleted'), findsOneWidget);
+      expect(find.textContaining('moved to Trash'), findsNothing);
+    });
   });
 }

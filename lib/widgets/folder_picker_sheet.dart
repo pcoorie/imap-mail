@@ -15,11 +15,24 @@ Future<MailFolder?> showFolderPicker(BuildContext context, List<MailFolder> fold
             padding: EdgeInsets.all(16),
             child: Text('Move to', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
-          for (final folder in folders)
-            ListTile(
-              title: Text(folder.name),
-              onTap: () => Navigator.of(context).pop(folder),
+          // Bounded + scrollable, matching FolderTreeExpander's fix for the
+          // same failure mode: an account with many folders would otherwise
+          // overflow the sheet's RenderFlex with no way to reach the rest.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 260),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final folder in folders)
+                    ListTile(
+                      title: Text(folder.name),
+                      onTap: () => Navigator.of(context).pop(folder),
+                    ),
+                ],
+              ),
             ),
+          ),
         ],
       ),
     ),

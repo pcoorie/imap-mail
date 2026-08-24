@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -40,6 +42,16 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
   bool _selecting = false;
   final Set<int> _selectedIds = {};
 
+  // See _showAutoDismissingSnackBar's doc comment for why this exists —
+  // same rationale and pattern as MessageSwipeController's own field.
+  Timer? _snackBarDismissTimer;
+
+  @override
+  void dispose() {
+    _snackBarDismissTimer?.cancel();
+    super.dispose();
+  }
+
   MailFolder? _currentFolder(List<MailFolder>? folders) {
     if (folders == null) return null;
     final defaults = <MailFolder>[
@@ -73,6 +85,23 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
         _selectedIds.clear();
       });
 
+  /// Shows [snackBar] via [messenger] and guarantees it disappears after
+  /// [snackBar]'s own `duration`, even if its built-in auto-dismiss timer
+  /// doesn't fire — see MessageSwipeController._showAutoDismissingSnackBar
+  /// for the same workaround and why it exists. Also clears any snackbar
+  /// already showing/queued first, so a new bulk action's feedback is never
+  /// stuck waiting behind a stale one.
+  void _showAutoDismissingSnackBar(ScaffoldMessengerState messenger, SnackBar snackBar) {
+    _snackBarDismissTimer?.cancel();
+    messenger.clearSnackBars();
+    messenger.showSnackBar(snackBar);
+    _snackBarDismissTimer = Timer(snackBar.duration, () {
+      if (messenger.mounted) {
+        messenger.hideCurrentSnackBar();
+      }
+    });
+  }
+
   void _showBulkResultSnackBar(BulkResult result, {required String verb}) {
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger == null) return;
@@ -86,8 +115,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
     } else {
       text = '$succeededCount moved, $failedCount failed';
     }
-    messenger.clearSnackBars();
-    messenger.showSnackBar(SnackBar(content: Text(text)));
+    _showAutoDismissingSnackBar(messenger, SnackBar(content: Text(text)));
   }
 
   Future<void> _bulkDelete(MailFolder folder) async {
@@ -97,13 +125,21 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
     if (selected.isEmpty) return;
     final account = _findAccount();
     if (account == null) return;
+    // Mirrors MailRepository.deleteMessage/deleteMessages' own branch
+    // condition exactly: a Trash folder exists and it isn't the folder
+    // already being viewed. Anything else is a PERMANENT local-only
+    // removal (no Trash to catch it, or already viewing Trash) — the
+    // summary snackbar must say so, not claim a move that never happened.
+    final allFolders = ref.read(foldersProvider(widget.accountId)).valueOrNull ?? const <MailFolder>[];
+    final trashFolder = allFolders.firstWhereOrNull((f) => f.type == MailFolderType.trash);
+    final movesToTrash = trashFolder != null && trashFolder.id != folder.id;
     try {
       final repository = await ref.read(mailRepositoryProvider.future);
       final result = await repository.deleteMessages(account, folder, selected);
       if (!mounted) return;
       ref.invalidate(messagesProvider(folder));
       ref.read(unreadCountRefreshTickProvider.notifier).state++;
-      _showBulkResultSnackBar(result, verb: 'moved to Trash');
+      _showBulkResultSnackBar(result, verb: movesToTrash ? 'moved to Trash' : 'deleted');
     } catch (e) {
       if (!mounted) return;
       // Match performSwipeAction's catch block: refresh the list/unread count
@@ -113,8 +149,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
       ref.read(unreadCountRefreshTickProvider.notifier).state++;
       final messenger = ScaffoldMessenger.maybeOf(context);
       if (messenger == null) return;
-      messenger.clearSnackBars();
-      messenger.showSnackBar(SnackBar(content: Text("Couldn't delete — $e")));
+      _showAutoDismissingSnackBar(messenger, SnackBar(content: Text("Couldn't delete — $e")));
     }
   }
 
@@ -147,8 +182,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
       ref.read(unreadCountRefreshTickProvider.notifier).state++;
       final messenger = ScaffoldMessenger.maybeOf(context);
       if (messenger == null) return;
-      messenger.clearSnackBars();
-      messenger.showSnackBar(SnackBar(content: Text("Couldn't move — $e")));
+      _showAutoDismissingSnackBar(messenger, SnackBar(content: Text("Couldn't move — $e")));
     }
   }
 

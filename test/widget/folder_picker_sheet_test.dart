@@ -54,4 +54,24 @@ void main() {
 
     expect(result, isNull);
   });
+
+  testWidgets('does not overflow when given many folders', (tester) async {
+    final manyFolders = List.generate(
+      30,
+      (i) => MailFolder(id: 10 + i, accountId: 1, name: 'Folder $i', path: 'Folder$i', type: MailFolderType.other),
+    );
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(
+        builder: (context) => ElevatedButton(
+          onPressed: () => showFolderPicker(context, manyFolders),
+          child: const Text('Open'),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+  });
 }
