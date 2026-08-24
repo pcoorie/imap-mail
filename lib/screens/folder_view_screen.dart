@@ -2,12 +2,15 @@ import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
+import '../data/repository/mail_repository.dart';
 import '../models/enums.dart';
 import '../models/mail_account.dart';
 import '../models/mail_folder.dart';
+import '../models/mail_message.dart';
 import '../providers/account_providers.dart';
 import '../providers/folder_providers.dart';
 import '../providers/message_providers.dart';
+import '../providers/repository_providers.dart';
 import '../providers/sync_status_providers.dart';
 import '../providers/swipe_action_providers.dart';
 import '../widgets/empty_folder_state.dart';
@@ -33,42 +36,136 @@ class FolderViewScreen extends ConsumerStatefulWidget {
 
 class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
   MailFolder? _selected;
+  bool _selecting = false;
+  final Set<int> _selectedIds = {};
+
+  MailFolder? _currentFolder(List<MailFolder>? folders) {
+    if (folders == null) return null;
+    final defaults = <MailFolder>[
+      for (final type in [
+        MailFolderType.inbox,
+        MailFolderType.sent,
+        MailFolderType.trash,
+      ])
+        ...folders.where((f) => f.type == type),
+    ];
+    return _selected ??
+        (defaults.isNotEmpty ? defaults.first : (folders.isNotEmpty ? folders.first : null));
+  }
+
+  void _enterSelection(int id) => setState(() {
+        _selecting = true;
+        _selectedIds.add(id);
+      });
+
+  void _toggleSelection(int id) => setState(() {
+        if (!_selectedIds.remove(id)) {
+          _selectedIds.add(id);
+        }
+        if (_selectedIds.isEmpty) {
+          _selecting = false;
+        }
+      });
+
+  void _exitSelection() => setState(() {
+        _selecting = false;
+        _selectedIds.clear();
+      });
+
+  void _showBulkResultSnackBar(BulkResult result, {required String verb}) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    final succeededCount = result.succeeded.length;
+    final failedCount = result.failed.length;
+    final String text;
+    if (failedCount == 0) {
+      text = '$succeededCount $verb';
+    } else if (succeededCount == 0) {
+      text = "Couldn't move $failedCount message${failedCount == 1 ? '' : 's'}";
+    } else {
+      text = '$succeededCount moved, $failedCount failed';
+    }
+    messenger.clearSnackBars();
+    messenger.showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _bulkDelete(MailFolder folder) async {
+    final messages = ref.read(messagesProvider(folder)).valueOrNull ?? const <MailMessage>[];
+    final selected = messages.where((m) => _selectedIds.contains(m.id)).toList();
+    _exitSelection();
+    if (selected.isEmpty) return;
+    final account = _findAccount();
+    if (account == null) return;
+    final repository = await ref.read(mailRepositoryProvider.future);
+    final result = await repository.deleteMessages(account, folder, selected);
+    if (!mounted) return;
+    ref.invalidate(messagesProvider(folder));
+    ref.read(unreadCountRefreshTickProvider.notifier).state++;
+    _showBulkResultSnackBar(result, verb: 'moved to Trash');
+  }
+
+  PreferredSizeWidget _buildDefaultAppBar() {
+    return AppBar(
+      title: const Text('Mail'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search),
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SearchScreen())),
+        ),
+        // Single-account routing (app.dart) skips AccountListScreen
+        // entirely — its gear icon was the only path to SettingsScreen,
+        // so a single-account user would otherwise have no way to reach
+        // theme/swipe-action settings at all.
+        IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
+        ),
+      ],
+    );
+  }
+
+  PreferredSizeWidget _buildSelectionAppBar(MailFolder current) {
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        tooltip: 'Cancel selection',
+        onPressed: _exitSelection,
+      ),
+      title: Text('${_selectedIds.length} selected'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.delete_outline),
+          tooltip: 'Delete',
+          onPressed: () => _bulkDelete(current),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final foldersAsync = ref.watch(foldersProvider(widget.accountId));
     final syncError = ref.watch(syncErrorProvider(widget.accountId));
+    final current = _currentFolder(foldersAsync.valueOrNull);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mail'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SearchScreen())),
-          ),
-          // Single-account routing (app.dart) skips AccountListScreen
-          // entirely — its gear icon was the only path to SettingsScreen,
-          // so a single-account user would otherwise have no way to reach
-          // theme/swipe-action settings at all.
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ComposeScreen(accountId: widget.accountId),
-          ),
-        ),
-        child: const Icon(Icons.edit),
-      ),
+      appBar: _selecting && current != null
+          ? _buildSelectionAppBar(current)
+          : _buildDefaultAppBar(),
+      floatingActionButton: _selecting
+          ? null
+          : FloatingActionButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ComposeScreen(accountId: widget.accountId),
+                ),
+              ),
+              child: const Icon(Icons.edit),
+            ),
       body: foldersAsync.when(
         data: (folders) {
           final defaults = <MailFolder>[
@@ -80,11 +177,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
               ...folders.where((f) => f.type == type),
           ];
           final rest = folders.where((f) => !defaults.contains(f)).toList();
-          final current =
-              _selected ??
-              (defaults.isNotEmpty
-                  ? defaults.first
-                  : (folders.isNotEmpty ? folders.first : null));
+          final current = _currentFolder(folders);
 
           return Column(
             children: [
@@ -120,7 +213,11 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
                 child: FolderTabBar(
                   folders: defaults,
                   selected: current,
-                  onSelect: (folder) => setState(() => _selected = folder),
+                  onSelect: (folder) => setState(() {
+                    _selected = folder;
+                    _selecting = false;
+                    _selectedIds.clear();
+                  }),
                 ),
               ),
               // Bounded + scrollable: FolderTreeExpander's expanded list is a
@@ -135,13 +232,25 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
                 child: SingleChildScrollView(
                   child: FolderTreeExpander(
                     folders: rest,
-                    onSelect: (folder) => setState(() => _selected = folder),
+                    onSelect: (folder) => setState(() {
+                      _selected = folder;
+                      _selecting = false;
+                      _selectedIds.clear();
+                    }),
                   ),
                 ),
               ),
               const Divider(height: 1),
               if (current != null)
-                Expanded(child: _MessageList(folder: current)),
+                Expanded(
+                  child: _MessageList(
+                    folder: current,
+                    selecting: _selecting,
+                    selectedIds: _selectedIds,
+                    onEnterSelection: _enterSelection,
+                    onToggleSelection: _toggleSelection,
+                  ),
+                ),
             ],
           );
         },
@@ -170,9 +279,19 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
 }
 
 class _MessageList extends ConsumerStatefulWidget {
-  const _MessageList({required this.folder});
+  const _MessageList({
+    required this.folder,
+    required this.selecting,
+    required this.selectedIds,
+    required this.onEnterSelection,
+    required this.onToggleSelection,
+  });
 
   final MailFolder folder;
+  final bool selecting;
+  final Set<int> selectedIds;
+  final ValueChanged<int> onEnterSelection;
+  final ValueChanged<int> onToggleSelection;
 
   @override
   ConsumerState<_MessageList> createState() => _MessageListState();
@@ -216,6 +335,14 @@ class _MessageListState extends ConsumerState<_MessageList> {
     return messagesAsync.when(
       data: (messages) {
         _pendingRemoval.retainAll(messages.map((m) => m.id).whereType<int>());
+        // `widget.selectedIds` is the SAME Set instance _FolderViewScreenState
+        // owns (passed down, not copied) — mutating it here drops a
+        // since-vanished message from the selection immediately, per the
+        // design spec. This doesn't itself call the parent's setState, so
+        // the app bar's "N selected" count can lag by one frame until the
+        // next selection change triggers a rebuild — acceptable for this
+        // rare edge case (a sync/refresh removing a selected message).
+        widget.selectedIds.retainAll(messages.map((m) => m.id).whereType<int>());
         final visible = messages
             .where((m) => !_pendingRemoval.contains(m.id))
             .toList();
@@ -280,6 +407,25 @@ class _MessageListState extends ConsumerState<_MessageList> {
                     if (account == null) {
                       return const Center(child: CircularProgressIndicator());
                     }
+                    final tile = MessageListTile(
+                      key: ValueKey(message.id),
+                      message: message,
+                      selected: widget.selecting ? widget.selectedIds.contains(message.id) : null,
+                      onLongPress: () => widget.onEnterSelection(message.id!),
+                      onTap: widget.selecting
+                          ? () => widget.onToggleSelection(message.id!)
+                          : () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => MessageDetailScreen(
+                                    folder: folder,
+                                    message: message,
+                                  ),
+                                ),
+                              ),
+                    );
+                    if (widget.selecting) {
+                      return tile;
+                    }
                     return Slidable(
                       key: ValueKey(message.id),
                       startActionPane: _swipeController.buildActionPane(
@@ -300,17 +446,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
                         onRemoved: (id) =>
                             setState(() => _pendingRemoval.add(id)),
                       ),
-                      child: MessageListTile(
-                        message: message,
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => MessageDetailScreen(
-                              folder: folder,
-                              message: message,
-                            ),
-                          ),
-                        ),
-                      ),
+                      child: tile,
                     );
                   },
                 ),
