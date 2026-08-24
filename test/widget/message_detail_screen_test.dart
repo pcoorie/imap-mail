@@ -147,6 +147,16 @@ class _FakeMailTransport implements MailTransport {
     MailFolder destination,
   ) async =>
       null;
+
+  @override
+  Future<Map<int, int?>> moveMessages(
+    MailAccount account,
+    String password,
+    MailFolder source,
+    List<MailMessage> messages,
+    MailFolder destination,
+  ) async =>
+      const {};
 }
 
 class _FakeAttachmentOpener implements AttachmentOpener {
