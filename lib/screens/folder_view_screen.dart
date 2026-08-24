@@ -14,6 +14,7 @@ import '../providers/repository_providers.dart';
 import '../providers/sync_status_providers.dart';
 import '../providers/swipe_action_providers.dart';
 import '../widgets/empty_folder_state.dart';
+import '../widgets/folder_picker_sheet.dart';
 import '../widgets/folder_tab_bar.dart';
 import '../widgets/folder_tree_expander.dart';
 import '../widgets/message_list_tile.dart';
@@ -117,6 +118,40 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
     }
   }
 
+  Future<void> _bulkMove(MailFolder folder, List<MailFolder> allFolders) async {
+    final destination = await showFolderPicker(
+      context,
+      allFolders.where((f) => f.id != folder.id).toList(),
+    );
+    if (destination == null) return;
+    final messages = ref.read(messagesProvider(folder)).valueOrNull ?? const <MailMessage>[];
+    final selected = messages.where((m) => _selectedIds.contains(m.id)).toList();
+    _exitSelection();
+    if (selected.isEmpty) return;
+    final account = _findAccount();
+    if (account == null) return;
+    try {
+      final repository = await ref.read(mailRepositoryProvider.future);
+      final result = await repository.moveMessages(account, folder, destination, selected);
+      if (!mounted) return;
+      ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
+      _showBulkResultSnackBar(result, verb: 'moved to ${destination.name}');
+    } catch (e) {
+      if (!mounted) return;
+      // Match _bulkDelete's/performSwipeAction's catch block: refresh the
+      // list/unread count even on failure, since the repository call may
+      // have partially committed local DB changes before the error was
+      // thrown.
+      ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger == null) return;
+      messenger.clearSnackBars();
+      messenger.showSnackBar(SnackBar(content: Text("Couldn't move — $e")));
+    }
+  }
+
   PreferredSizeWidget _buildDefaultAppBar() {
     return AppBar(
       title: const Text('Mail'),
@@ -141,7 +176,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
     );
   }
 
-  PreferredSizeWidget _buildSelectionAppBar(MailFolder current) {
+  PreferredSizeWidget _buildSelectionAppBar(MailFolder current, List<MailFolder> allFolders) {
     return AppBar(
       leading: IconButton(
         icon: const Icon(Icons.close),
@@ -150,6 +185,11 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
       ),
       title: Text('${_selectedIds.length} selected'),
       actions: [
+        IconButton(
+          icon: const Icon(Icons.folder_outlined),
+          tooltip: 'Move to folder',
+          onPressed: () => _bulkMove(current, allFolders),
+        ),
         IconButton(
           icon: const Icon(Icons.delete_outline),
           tooltip: 'Delete',
@@ -167,7 +207,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
 
     return Scaffold(
       appBar: _selecting && current != null
-          ? _buildSelectionAppBar(current)
+          ? _buildSelectionAppBar(current, foldersAsync.valueOrNull ?? const [])
           : _buildDefaultAppBar(),
       floatingActionButton: _selecting
           ? null

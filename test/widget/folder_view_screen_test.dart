@@ -701,7 +701,7 @@ void main() {
     expect(find.byType(SearchScreen), findsOneWidget);
   });
 
-  group('multi-select and bulk Trash', () {
+  group('multi-select and bulk actions', () {
     testWidgets('long-pressing a row enters selection mode with a contextual app bar', (tester) async {
       await tester.pumpWidget(ProviderScope(
         overrides: [
@@ -971,6 +971,124 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('1 moved, 1 failed'), findsOneWidget);
+    });
+
+    testWidgets(
+        'tapping Move to folder opens the folder picker and bulk-moves selected messages to the chosen folder',
+        (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.moveMessages(any(), any(), any(), any())).thenAnswer(
+        (_) async => BulkResult(succeeded: [message.copyWith(folderId: trash.id!)], failed: const {}),
+      );
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.folder_outlined));
+      await tester.pumpAndSettle();
+
+      // "Trash" also appears as a background folder tab — scope to the
+      // picker's own bottom sheet (see the "excludes the folder currently
+      // being viewed" test below for the same collision with Inbox/Sent).
+      final trashInSheet = find.descendant(of: find.byType(BottomSheet), matching: find.text('Trash'));
+      expect(trashInSheet, findsOneWidget);
+      await tester.tap(trashInSheet);
+      await tester.pumpAndSettle();
+
+      verify(() => repository.moveMessages(account, inbox, trash, [message])).called(1);
+      expect(find.textContaining('moved to Trash'), findsOneWidget);
+    });
+
+    testWidgets('the folder picker excludes the folder currently being viewed', (tester) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.folder_outlined));
+      await tester.pumpAndSettle();
+
+      // "Inbox" (the folder being viewed) also appears as a background tab —
+      // scope the check to the picker's own bottom sheet.
+      expect(find.descendant(of: find.byType(BottomSheet), matching: find.text('Inbox')), findsNothing);
+      expect(find.descendant(of: find.byType(BottomSheet), matching: find.text('Sent')), findsOneWidget);
+      expect(find.descendant(of: find.byType(BottomSheet), matching: find.text('Trash')), findsOneWidget);
+    });
+
+    testWidgets('dismissing the folder picker without choosing a folder leaves the selection untouched',
+        (tester) async {
+      final repository = MockMailRepository();
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.folder_outlined));
+      await tester.pumpAndSettle();
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 selected'), findsOneWidget);
+      verifyNever(() => repository.moveMessages(any(), any(), any(), any()));
+    });
+
+    testWidgets('a bulk-move call that throws reports the failure instead of crashing', (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.moveMessages(any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.folder_outlined));
+      await tester.pumpAndSettle();
+      // "Trash" also appears as a background folder tab — scope to the
+      // picker's own bottom sheet.
+      await tester.tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Trash')));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining("Couldn't move"), findsOneWidget);
     });
   });
 }
