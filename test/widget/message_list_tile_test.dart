@@ -242,4 +242,99 @@ void main() {
 
     expect(find.text('Yesterday'), findsOneWidget);
   });
+
+  testWidgets('does not show a selection checkbox when selected is null (default browsing)', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.none),
+          onTap: () {},
+        ),
+      ),
+    ));
+
+    expect(find.byKey(const Key('selectionCheckbox')), findsNothing);
+  });
+
+  testWidgets('shows an unfilled round checkbox when selected: false', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.none),
+          onTap: () {},
+          selected: false,
+        ),
+      ),
+    ));
+
+    final box = tester.widget<Container>(find.byKey(const Key('selectionCheckbox')));
+    final decoration = box.decoration as BoxDecoration;
+    expect(decoration.color, Colors.transparent);
+    expect(find.byIcon(Icons.check), findsNothing);
+  });
+
+  testWidgets('shows a filled round checkbox with a checkmark when selected: true', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.none),
+          onTap: () {},
+          selected: true,
+        ),
+      ),
+    ));
+
+    final scheme = Theme.of(tester.element(find.byType(Scaffold))).colorScheme;
+    final box = tester.widget<Container>(find.byKey(const Key('selectionCheckbox')));
+    final decoration = box.decoration as BoxDecoration;
+    expect(decoration.color, scheme.primary);
+    expect(find.byIcon(Icons.check), findsOneWidget);
+  });
+
+  testWidgets('tints the row background when selected: true', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.none),
+          onTap: () {},
+          selected: true,
+        ),
+      ),
+    ));
+
+    final tile = tester.widget<ListTile>(find.byType(ListTile));
+    expect(tile.tileColor, isNotNull);
+  });
+
+  testWidgets('does not tint the row background when selected: false', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.none),
+          onTap: () {},
+          selected: false,
+        ),
+      ),
+    ));
+
+    final tile = tester.widget<ListTile>(find.byType(ListTile));
+    expect(tile.tileColor, isNull);
+  });
+
+  testWidgets('fires onLongPress when the row is long-pressed', (tester) async {
+    var longPressed = false;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: MessageListTile(
+          message: message(sendStatus: MailSendStatus.none),
+          onTap: () {},
+          onLongPress: () => longPressed = true,
+        ),
+      ),
+    ));
+
+    await tester.longPress(find.byType(ListTile));
+
+    expect(longPressed, isTrue);
+  });
 }

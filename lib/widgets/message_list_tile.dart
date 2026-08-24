@@ -10,6 +10,8 @@ class MessageListTile extends StatelessWidget {
     required this.message,
     required this.onTap,
     this.accountColor,
+    this.selected,
+    this.onLongPress,
   });
 
   final MailMessage message;
@@ -22,6 +24,33 @@ class MessageListTile extends StatelessWidget {
   /// avatar. Null in the single-account folder view, where every row is
   /// obviously the same account and a badge would just be noise.
   final Color? accountColor;
+
+  /// `null` (the default) means selection mode is not active — the row
+  /// renders exactly as it always has, with no checkbox. Once selection
+  /// mode is active, callers pass `true`/`false` for every row (whether
+  /// this particular message is selected), and a round checkbox appears
+  /// before the existing leading content: a hollow ring when `false`, a
+  /// filled circle with a checkmark when `true`.
+  final bool? selected;
+
+  /// Wired to [ListTile.onLongPress] — the entry point into selection mode.
+  final VoidCallback? onLongPress;
+
+  Widget _selectionCheckbox(BuildContext context, bool isSelected) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      key: const Key('selectionCheckbox'),
+      width: 24,
+      height: 24,
+      margin: const EdgeInsets.only(right: 12),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: isSelected ? scheme.primary : Colors.transparent,
+        border: isSelected ? null : Border.all(color: scheme.outline, width: 2),
+      ),
+      child: isSelected ? Icon(Icons.check, size: 16, color: scheme.onPrimary) : null,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -38,37 +67,48 @@ class MessageListTile extends StatelessWidget {
     final senderDisplay = message.fromName?.trim().isNotEmpty == true
         ? message.fromName!
         : primaryEmail;
-    return ListTile(
-      tileColor: message.isFlagged
-          ? Colors.orange.withValues(alpha: 0.08)
-          : null,
-      leading: failed
-          ? const Icon(Icons.error_outline, color: Colors.red)
-          : accountColor != null
-          ? Stack(
-              clipBehavior: Clip.none,
-              children: [
-                avatar,
-                Positioned(
-                  right: -2,
-                  bottom: -2,
-                  child: Container(
-                    key: const Key('accountColorDot'),
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      color: accountColor,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Theme.of(context).scaffoldBackgroundColor,
-                        width: 2,
-                      ),
+    final leadingContent = failed
+        ? const Icon(Icons.error_outline, color: Colors.red)
+        : accountColor != null
+        ? Stack(
+            clipBehavior: Clip.none,
+            children: [
+              avatar,
+              Positioned(
+                right: -2,
+                bottom: -2,
+                child: Container(
+                  key: const Key('accountColorDot'),
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: accountColor,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Theme.of(context).scaffoldBackgroundColor,
+                      width: 2,
                     ),
                   ),
                 ),
+              ),
+            ],
+          )
+        : avatar;
+    return ListTile(
+      tileColor: selected == true
+          ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.08)
+          : message.isFlagged
+          ? Colors.orange.withValues(alpha: 0.08)
+          : null,
+      leading: selected == null
+          ? leadingContent
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _selectionCheckbox(context, selected!),
+                leadingContent,
               ],
-            )
-          : avatar,
+            ),
       title: Text(
         message.subject,
         style: TextStyle(
@@ -92,6 +132,7 @@ class MessageListTile extends StatelessWidget {
         ],
       ),
       onTap: onTap,
+      onLongPress: onLongPress,
     );
   }
 }
