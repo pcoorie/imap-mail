@@ -92,24 +92,23 @@ flutter_launcher_icons:
   web:
     generate: true
     image_path: "assets/icon/app_icon.png"
-    background_color: "#2C4560"
-    theme_color: "#2C4560"
+    background_color: "#1B5A96"
+    theme_color: "#1B5A96"
 
-# Dark slate-blue (the middle stop of the "Brushed Steel Envelope" icon's
-# background gradient, see tool/gen_icon.py) — was the bright cobalt
-# "0A5BD6" while the icon had a bright cobalt background; updated to match
-# once the icon switched to a darker gradient, so the launch screen doesn't
-# flash a mismatched bright blue before the app's UI takes over.
+# Mid blue (the middle stop of the "Brushed Steel Envelope" icon's "Ocean
+# Sweep" background gradient, see tool/gen_icon.py) — updated to match
+# each time the icon's gradient changes, so the launch screen doesn't
+# flash a mismatched color before the app's UI takes over.
 flutter_native_splash:
-  color: "2C4560"
-  color_dark: "2C4560"
+  color: "1B5A96"
+  color_dark: "1B5A96"
   image: assets/icon/splash_logo.png
   image_dark: assets/icon/splash_logo.png
   android_12:
     image: assets/icon/splash_logo_android12.png
     image_dark: assets/icon/splash_logo_android12.png
-    color: "2C4560"
-    color_dark: "2C4560"
+    color: "1B5A96"
+    color_dark: "1B5A96"
   android: true
   ios: true
   web: true

@@ -1,12 +1,15 @@
-"""Generate the "Brushed Steel Envelope" app icon — a dark slate-blue-gray
-diagonal background, the same white envelope glyph the app has always used,
-now with a brushed-steel triangular flap (a classic sealed-letter silhouette
+"""Generate the "Brushed Steel Envelope" app icon — a blue diagonal
+background ("Ocean Sweep": brighter and more mid-toned than the original
+slate-gray sweep), the same white envelope glyph the app has always used,
+with a brushed-steel triangular flap (a classic sealed-letter silhouette
 rendered in metal) and a small blue riveted seal at the flap's point.
 Chosen from four metal/armor concept directions explored on a design canvas
 — a middle ground between the earlier "Riveted Armor Plate" (too busy at
 small sizes) and "Lock-Seal Envelope" (no flap at all) directions: a
 familiar envelope shape, metal-clad, with one clear accent rivet instead of
-a busy panel.
+a busy panel. The envelope glyph itself was later enlarged ~16% and
+recentered dead-center on the canvas (it was previously offset 40px below
+center to balance an earlier, smaller flap).
 
 iOS 26 ("Liquid Glass") guidance baked in (carried over from every prior
 version of this generator):
@@ -98,14 +101,13 @@ def radial_gradient_patch(diameter: int, inner: str, outer: str, focal_offset: t
 
 
 def main() -> None:
-    # Background: dark slate-blue-gray diagonal sweep (three stops, darkest
-    # at the top-left corner) — cooler and darker than the cobalt-blue
-    # backgrounds of the earlier two directions, to let the brushed-steel
-    # flap read as the icon's focal metal element rather than compete with
-    # a bright blue field.
+    # Background: blue diagonal sweep (three stops, darkest at the
+    # top-left corner) — "Ocean Sweep": brighter and more saturated than
+    # the original slate-gray version, still dark enough at the top-left
+    # corner to let the brushed-steel flap read clearly against it.
     bg = linear_gradient(
         (SIZE, SIZE),
-        [(0.0, "#101B2C"), (0.55, "#2C4560"), (1.0, "#5B7B99")],
+        [(0.0, "#0D2A4A"), (0.55, "#1B5A96"), (1.0, "#4FA0E0")],
         (0, 0),
         (SIZE, SIZE),
     )
@@ -117,15 +119,15 @@ def main() -> None:
     for y0, height in [(120, 90), (640, 60)]:
         img = Image.alpha_composite(img, diagonal_highlight_band(SIZE, angle_deg=-22, y0=y0, height=height, opacity=0.16))
 
-    # Envelope body — unchanged geometry from every prior version of this
-    # icon.
+    # Envelope body — ~16% larger than every prior version of this icon,
+    # and dead-center on the canvas (previously offset 40px below center).
     draw = ImageDraw.Draw(img)
-    body_w, body_h = 620, 420
+    body_w, body_h = 720, 488
     left = (SIZE - body_w) // 2
-    top = (SIZE - body_h) // 2 + 40
+    top = (SIZE - body_h) // 2
     right = left + body_w
     bottom = top + body_h
-    radius = 56
+    radius = 65
     white = (244, 246, 248, 255)
     draw.rounded_rectangle([left, top, right, bottom], radius=radius, fill=white, corners=(False, False, True, True))
     draw.rectangle([left, top, right, top + radius], fill=white)
@@ -134,7 +136,7 @@ def main() -> None:
     # diagonal steel gradient (light upper-left to dark lower-right) rather
     # than a flat color — the "brushed steel" of the icon's name — with a
     # subtle dark seam stroke tracing its fold lines.
-    apex_y = top + 190
+    apex_y = top + 221
     flap_mask = Image.new("L", (SIZE, SIZE), 0)
     ImageDraw.Draw(flap_mask).polygon([(left, top), (right, top), ((left + right) // 2, apex_y)], fill=255)
     flap_grad = linear_gradient((SIZE, SIZE), [(0.0, "#8896A3"), (1.0, "#3F4B57")], (left, top), (right, apex_y))
@@ -144,21 +146,21 @@ def main() -> None:
     ImageDraw.Draw(seam_layer).line(
         [(left, top), ((left + right) // 2, apex_y), (right, top)],
         fill=(22, 33, 44, round(255 * 0.35)),
-        width=6,
+        width=7,
         joint="curve",
     )
     img = Image.alpha_composite(img, seam_layer)
 
     # Riveted seal at the flap's point — a small embossed radial-gradient
     # bead in the app's cobalt blue, with a white specular highlight dot.
-    rivet_d = 52  # 2 * r=26
+    rivet_d = 60  # 2 * r=30
     rivet_cx, rivet_cy = (left + right) // 2, apex_y
     rivet_patch = radial_gradient_patch(rivet_d, "#3E8CF0", "#06409E", focal_offset=(-0.30, -0.40))
     img.alpha_composite(rivet_patch, (rivet_cx - rivet_d // 2, rivet_cy - rivet_d // 2))
 
     specular = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     ImageDraw.Draw(specular).ellipse(
-        [rivet_cx - 17, rivet_cy - 17, rivet_cx - 1, rivet_cy - 1],
+        [rivet_cx - 20, rivet_cy - 20, rivet_cx - 1, rivet_cy - 1],
         fill=(255, 255, 255, round(255 * 0.55)),
     )
     img = Image.alpha_composite(img, specular)

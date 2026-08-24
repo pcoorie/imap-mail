@@ -10,6 +10,9 @@ Two outputs:
     pixels stay within Android 12's circular safe zone (per current
     platform guidance, icon content must stay within the inner ~2/3 of
     the canvas — https://developer.android.com/develop/ui/views/launch/splash-screen).
+    Scale is tuned to reproduce the same on-canvas bounding box as the
+    pre-enlargement glyph, so the safe-zone fit doesn't change when the
+    glyph itself is resized.
 
 Both are fully transparent outside the glyph — no background fill, unlike
 assets/icon/app_icon.png (which has an opaque square baked in for the
@@ -79,16 +82,16 @@ def draw_envelope(canvas_size, scale=1.0):
     riveted-seal accent, matching gen_icon.py's "Brushed Steel Envelope"
     geometry exactly — on a transparent canvas of canvas_size, scaled by
     `scale` around the canvas center. scale=1.0 reproduces the exact
-    geometry used for the app icon's glyph."""
+    geometry used for the app icon's glyph (720x420 body, dead-centered)."""
     img = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    body_w, body_h = int(620 * scale), int(420 * scale)
+    body_w, body_h = int(720 * scale), int(488 * scale)
     left = (canvas_size - body_w) // 2
-    top = (canvas_size - body_h) // 2 + int(40 * scale)
+    top = (canvas_size - body_h) // 2
     right = left + body_w
     bottom = top + body_h
-    radius = int(56 * scale)
+    radius = int(65 * scale)
 
     draw.rounded_rectangle(
         [left, top, right, bottom], radius=radius, fill=WHITE,
@@ -96,7 +99,7 @@ def draw_envelope(canvas_size, scale=1.0):
     )
     draw.rectangle([left, top, right, top + radius], fill=WHITE)
 
-    apex_y = top + int(190 * scale)
+    apex_y = top + int(221 * scale)
     flap_mask = Image.new("L", (canvas_size, canvas_size), 0)
     ImageDraw.Draw(flap_mask).polygon(
         [(left, top), (right, top), ((left + right) // 2, apex_y)], fill=255,
@@ -106,7 +109,7 @@ def draw_envelope(canvas_size, scale=1.0):
     )
     img = Image.composite(Image.fromarray(flap_grad).convert("RGBA"), img, flap_mask)
 
-    rivet_d = max(int(52 * scale), 2)
+    rivet_d = max(int(60 * scale), 2)
     rivet_cx, rivet_cy = (left + right) // 2, apex_y
     rivet_patch = radial_gradient_patch(rivet_d, "#3E8CF0", "#06409E", focal_offset=(-0.30, -0.40))
     img.alpha_composite(rivet_patch, (rivet_cx - rivet_d // 2, rivet_cy - rivet_d // 2))
@@ -118,10 +121,11 @@ def draw_envelope(canvas_size, scale=1.0):
 glyph = draw_envelope(SIZE, scale=1.0)
 glyph.save("assets/icon/splash_logo.png", "PNG")
 
-# Android 12 safe-zone variant — same shape, scaled to 0.62x so the glyph's
-# bounding box (620x420 at scale=1.0) shrinks to fit within the inner
-# 682x682 safe zone with margin to spare.
-glyph_a12 = draw_envelope(SIZE, scale=0.62)
+# Android 12 safe-zone variant — same shape, scaled to 0.534x so the
+# glyph's bounding box (720x488 at scale=1.0) shrinks to the same
+# on-canvas size the pre-enlargement 620x420 glyph had at its old 0.62x,
+# which fits within the inner 682x682 safe zone with margin to spare.
+glyph_a12 = draw_envelope(SIZE, scale=0.534)
 glyph_a12.save("assets/icon/splash_logo_android12.png", "PNG")
 
 print("saved splash_logo.png and splash_logo_android12.png")
