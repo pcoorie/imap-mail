@@ -252,6 +252,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           const SizedBox(height: 16),
           ElevatedButton(
             onPressed: _isValid && !_sending ? _send : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1E88E5),
+              foregroundColor: Colors.white,
+            ),
             child: Text(_sending ? 'Sending...' : 'Send'),
           ),
         ],
