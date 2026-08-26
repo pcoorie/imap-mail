@@ -15,7 +15,9 @@ import 'package:imap_mail/providers/account_providers.dart';
 import 'package:imap_mail/providers/compose_providers.dart';
 import 'package:imap_mail/providers/filesystem_providers.dart';
 import 'package:imap_mail/providers/repository_providers.dart';
+import 'package:imap_mail/providers/send_sound_providers.dart';
 import 'package:imap_mail/screens/compose_screen.dart';
+import 'package:imap_mail/services/send_sound_player.dart';
 
 class _FakeAccountsNotifier extends AccountsNotifier {
   _FakeAccountsNotifier(this._accounts);
@@ -27,6 +29,15 @@ class _FakeAccountsNotifier extends AccountsNotifier {
 }
 
 class MockMailRepository extends Mock implements MailRepository {}
+
+class _FakeSendSoundPlayer implements SendSoundPlayer {
+  int playCount = 0;
+
+  @override
+  Future<void> play() async {
+    playCount++;
+  }
+}
 
 // The form (To/Cc/Bcc/Subject/Message with maxLines: 10 + attach button +
 // Send button) is taller than the default 800x600 test viewport plus the
@@ -136,6 +147,54 @@ void main() {
 
     expect(find.textContaining('smtp unreachable'), findsOneWidget);
     expect(find.text('Hello Bob'), findsOneWidget); // body field still has the content
+  });
+
+  group('send sound', () {
+    testWidgets('plays after a successful send', (tester) async {
+      _growViewport(tester);
+      final soundPlayer = _FakeSendSoundPlayer();
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          sendMessageProvider.overrideWithValue((MailAccount a, ComposedMessage m) async {}),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          sendSoundPlayerProvider.overrideWithValue(soundPlayer),
+        ],
+        child: const MaterialApp(home: ComposeScreen(accountId: 1)),
+      ));
+
+      await tester.enterText(find.byKey(const Key('toField')), 'bob@example.com');
+      await tester.enterText(find.byKey(const Key('subjectField')), 'Hi');
+      await tester.enterText(find.byKey(const Key('bodyField')), 'Hello Bob');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Send'));
+      await tester.pumpAndSettle();
+
+      expect(soundPlayer.playCount, 1);
+    });
+
+    testWidgets('does not play when the send fails', (tester) async {
+      _growViewport(tester);
+      final soundPlayer = _FakeSendSoundPlayer();
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          sendMessageProvider.overrideWithValue((MailAccount a, ComposedMessage m) async {
+            throw Exception('smtp unreachable');
+          }),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          sendSoundPlayerProvider.overrideWithValue(soundPlayer),
+        ],
+        child: const MaterialApp(home: ComposeScreen(accountId: 1)),
+      ));
+
+      await tester.enterText(find.byKey(const Key('toField')), 'bob@example.com');
+      await tester.enterText(find.byKey(const Key('subjectField')), 'Hi');
+      await tester.enterText(find.byKey(const Key('bodyField')), 'Hello Bob');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Send'));
+      await tester.pumpAndSettle();
+
+      expect(soundPlayer.playCount, 0);
+    });
   });
 
   group('forwarding', () {

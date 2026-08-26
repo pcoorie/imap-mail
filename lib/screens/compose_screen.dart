@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -13,6 +14,7 @@ import '../providers/compose_providers.dart';
 import '../providers/filesystem_providers.dart';
 import '../providers/message_providers.dart';
 import '../providers/repository_providers.dart';
+import '../providers/send_sound_providers.dart';
 import '../utils/html_text.dart';
 
 /// The body text to quote when forwarding [message]: its plain-text part
@@ -189,6 +191,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       );
       final send = ref.read(sendMessageProvider);
       await send(account, composed);
+      // Fire-and-forget: SendSoundPlayer.play() never throws and this is
+      // pure UI polish, not part of the send operation — don't hold up
+      // popping the screen waiting for a ~1s sound effect to finish.
+      unawaited(ref.read(sendSoundPlayerProvider).play());
       // ComposeScreen has no Sent/Outbox MailFolder in scope (widget.folder,
       // when set, is only forwardOf's source folder) — can't target the
       // specific Sent/Outbox family instance the way MessageDetailScreen's
