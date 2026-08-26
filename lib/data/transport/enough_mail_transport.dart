@@ -102,9 +102,7 @@ class EnoughMailTransport implements MailTransport {
         sequence,
         fetchPreference: enough.FetchPreference.envelope,
       );
-      return mimeMessages
-          .map((mime) => mapMimeMessageToRecord(mime, folderId: folder.id!))
-          .toList();
+      return mapMimeMessagesToRecords(mimeMessages, folderId: folder.id!);
     } finally {
       await client.disconnect();
     }
