@@ -1,11 +1,18 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 import '../data/transport/mail_sender.dart';
+import '../models/mail_attachment.dart';
+import '../models/mail_folder.dart';
 import '../models/mail_message.dart';
 import '../providers/account_providers.dart';
 import '../providers/compose_providers.dart';
+import '../providers/filesystem_providers.dart';
 import '../providers/message_providers.dart';
+import '../providers/repository_providers.dart';
 import '../utils/html_text.dart';
 
 /// The body text to quote when forwarding [message]: its plain-text part
@@ -42,11 +49,30 @@ String _collapseBlankLines(String text) {
 }
 
 class ComposeScreen extends ConsumerStatefulWidget {
-  const ComposeScreen({super.key, required this.accountId, this.replyTo, this.forwardOf});
+  const ComposeScreen({
+    super.key,
+    required this.accountId,
+    this.replyTo,
+    this.forwardOf,
+    this.folder,
+    this.forwardAttachments = const [],
+  });
 
   final int accountId;
   final MailMessage? replyTo;
   final MailMessage? forwardOf;
+
+  /// The folder [forwardOf] lives in — needed only to download
+  /// [forwardAttachments] (MailRepository.downloadAttachment addresses the
+  /// server via account+folder+message, not the attachment alone). Unused
+  /// when [forwardAttachments] is empty.
+  final MailFolder? folder;
+
+  /// [forwardOf]'s own attachments, offered as an "include the original
+  /// attachment(s)" checkbox rather than attached unconditionally — see
+  /// _send's _resolveOriginalAttachmentPaths for how these get downloaded
+  /// (or reused, if already cached locally) at send time.
+  final List<MailAttachment> forwardAttachments;
 
   @override
   ConsumerState<ComposeScreen> createState() => _ComposeScreenState();
@@ -59,6 +85,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   late final TextEditingController _subject;
   late final TextEditingController _body;
   final List<String> _attachmentPaths = [];
+  bool _includeOriginalAttachments = true;
   String? _error;
   bool _sending = false;
 
@@ -106,6 +133,42 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (path != null) setState(() => _attachmentPaths.add(path));
   }
 
+  /// Local file paths for [ComposeScreen.forwardAttachments], to append
+  /// alongside whatever the user separately picked via [_pickAttachment].
+  /// Empty (no repository/network work at all) unless the "include original
+  /// attachment(s)" checkbox is on and there's actually something to
+  /// forward. An attachment already downloaded (e.g. the user opened it
+  /// from MessageDetailScreen before forwarding) reuses its cached
+  /// `localPath` instead of re-fetching it.
+  Future<List<String>> _resolveOriginalAttachmentPaths() async {
+    if (!_includeOriginalAttachments || widget.forwardAttachments.isEmpty) return const [];
+    final repository = await ref.read(mailRepositoryProvider.future);
+    final accounts = await ref.read(accountsProvider.future);
+    final account = accounts.firstWhere((a) => a.id == widget.accountId);
+    final paths = <String>[];
+    for (final attachment in widget.forwardAttachments) {
+      final cached = attachment.localPath;
+      if (cached != null) {
+        paths.add(cached);
+        continue;
+      }
+      final bytes = await repository.downloadAttachment(
+        account,
+        widget.folder!,
+        widget.forwardOf!,
+        attachment,
+      );
+      final dir = await ref.read(documentsDirectoryProvider.future);
+      final file = File(p.join(dir.path, attachment.filename));
+      file.writeAsBytesSync(bytes);
+      if (attachment.id != null) {
+        await repository.recordAttachmentLocalPath(attachment.id!, file.path);
+      }
+      paths.add(file.path);
+    }
+    return paths;
+  }
+
   Future<void> _send() async {
     setState(() {
       _sending = true;
@@ -114,6 +177,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     try {
       final accounts = await ref.read(accountsProvider.future);
       final account = accounts.firstWhere((a) => a.id == widget.accountId);
+      final originalAttachmentPaths = await _resolveOriginalAttachmentPaths();
       final composed = ComposedMessage(
         to: _to.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
         cc: _cc.text.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList(),
@@ -121,13 +185,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         subject: _subject.text.trim(),
         bodyText: _body.text,
         bodyHtml: null,
-        attachmentFilePaths: _attachmentPaths,
+        attachmentFilePaths: [..._attachmentPaths, ...originalAttachmentPaths],
       );
       final send = ref.read(sendMessageProvider);
       await send(account, composed);
-      // ComposeScreen has no MailFolder in scope (only an accountId), so it
-      // can't target the specific Sent/Outbox family instance the way
-      // MessageDetailScreen's delete flow can. Invalidating the whole family
+      // ComposeScreen has no Sent/Outbox MailFolder in scope (widget.folder,
+      // when set, is only forwardOf's source folder) — can't target the
+      // specific Sent/Outbox family instance the way MessageDetailScreen's
+      // delete flow can. Invalidating the whole family
       // is the reachable, still-correct blanket fix: any folder view
       // currently alive re-syncs next time it's read instead of showing
       // stale contents until a manual pull-to-refresh.
@@ -157,6 +222,17 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               decoration: const InputDecoration(labelText: 'Subject')),
           TextField(key: const Key('bodyField'), controller: _body, maxLines: 10,
               decoration: const InputDecoration(labelText: 'Message')),
+          if (widget.forwardAttachments.isNotEmpty)
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              value: _includeOriginalAttachments,
+              onChanged: (value) => setState(() => _includeOriginalAttachments = value ?? true),
+              title: Text(
+                'Include ${widget.forwardAttachments.length} original attachment'
+                '${widget.forwardAttachments.length == 1 ? '' : 's'}',
+              ),
+            ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             onPressed: _pickAttachment,

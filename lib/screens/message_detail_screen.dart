@@ -108,6 +108,8 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         builder: (_) => ComposeScreen(
           accountId: widget.folder.accountId,
           forwardOf: _resolved ?? widget.message,
+          folder: widget.folder,
+          forwardAttachments: _attachments,
         ),
       ),
     );

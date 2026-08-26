@@ -1,12 +1,20 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mocktail/mocktail.dart';
+import 'package:imap_mail/data/repository/mail_repository.dart';
 import 'package:imap_mail/data/transport/mail_sender.dart';
 import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/models/mail_account.dart';
+import 'package:imap_mail/models/mail_attachment.dart';
+import 'package:imap_mail/models/mail_folder.dart';
 import 'package:imap_mail/models/mail_message.dart';
 import 'package:imap_mail/providers/account_providers.dart';
 import 'package:imap_mail/providers/compose_providers.dart';
+import 'package:imap_mail/providers/filesystem_providers.dart';
+import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/screens/compose_screen.dart';
 
 class _FakeAccountsNotifier extends AccountsNotifier {
@@ -17,6 +25,8 @@ class _FakeAccountsNotifier extends AccountsNotifier {
   @override
   Future<List<MailAccount>> build() async => _accounts;
 }
+
+class MockMailRepository extends Mock implements MailRepository {}
 
 // The form (To/Cc/Bcc/Subject/Message with maxLines: 10 + attach button +
 // Send button) is taller than the default 800x600 test viewport plus the
@@ -45,6 +55,21 @@ void main() {
     smtpSecurity: MailSecurity.ssl,
     username: 'me@example.com',
   );
+
+  setUpAll(() {
+    registerFallbackValue(account);
+    registerFallbackValue(const MailFolder(accountId: 1, name: '', path: '', type: MailFolderType.inbox));
+    registerFallbackValue(MailMessage(
+      folderId: 1,
+      uid: 1,
+      subject: '',
+      from: '',
+      to: '',
+      date: DateTime.utc(2026, 1, 1),
+      snippet: '',
+    ));
+    registerFallbackValue(const MailAttachment(messageId: 1, filename: '', mimeType: '', size: 0));
+  });
 
   testWidgets('Send is disabled until a recipient and body are entered', (tester) async {
     _growViewport(tester);
@@ -209,5 +234,207 @@ void main() {
         expect(text.indexOf('Hi Peter,'), lessThan(20));
       },
     );
+  });
+
+  group('forwarding with attachments', () {
+    const folder = MailFolder(id: 1, accountId: 1, name: 'Inbox', path: 'INBOX', type: MailFolderType.inbox);
+
+    // Created in setUp (real async, outside testWidgets' fake-async zone),
+    // not inline in a test body — see message_detail_screen_test.dart's own
+    // tempDocsDir for the same established fix: a real
+    // Directory.systemTemp.createTemp() awaited directly inside a
+    // testWidgets callback never resolves (the same class of
+    // isolate-crossing hang documented there for `File.writeAsBytes`).
+    late Directory tempDir;
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('compose_screen_attachment_test');
+    });
+    tearDown(() => tempDir.delete(recursive: true));
+
+    MailMessage forwardMessage() => MailMessage(
+          id: 42,
+          folderId: 1,
+          uid: 1,
+          subject: 'Original subject',
+          from: 'alice@example.com',
+          to: 'me@example.com',
+          date: DateTime(2026, 1, 1),
+          snippet: 'snippet',
+          bodyText: 'Plain body',
+          isDownloaded: true,
+        );
+
+    testWidgets('shows no attachment checkbox when the forwarded message has none', (tester) async {
+      _growViewport(tester);
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: ComposeScreen(accountId: 1, folder: folder, forwardOf: forwardMessage()),
+        ),
+      ));
+
+      expect(find.textContaining('original attachment'), findsNothing);
+    });
+
+    testWidgets('shows a checked-by-default checkbox to include the original attachment(s)', (tester) async {
+      _growViewport(tester);
+      const attachments = [
+        MailAttachment(id: 1, messageId: 42, filename: 'invoice.pdf', mimeType: 'application/pdf', size: 2048),
+      ];
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: ComposeScreen(
+            accountId: 1,
+            folder: folder,
+            forwardOf: forwardMessage(),
+            forwardAttachments: attachments,
+          ),
+        ),
+      ));
+
+      expect(find.text('Include 1 original attachment'), findsOneWidget);
+      final checkbox = tester.widget<CheckboxListTile>(find.byType(CheckboxListTile));
+      expect(checkbox.value, isTrue);
+    });
+
+    testWidgets('pluralizes the checkbox label for more than one attachment', (tester) async {
+      _growViewport(tester);
+      const attachments = [
+        MailAttachment(id: 1, messageId: 42, filename: 'invoice.pdf', mimeType: 'application/pdf', size: 2048),
+        MailAttachment(id: 2, messageId: 42, filename: 'lease.pdf', mimeType: 'application/pdf', size: 4096),
+      ];
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: ComposeScreen(
+            accountId: 1,
+            folder: folder,
+            forwardOf: forwardMessage(),
+            forwardAttachments: attachments,
+          ),
+        ),
+      ));
+
+      expect(find.text('Include 2 original attachments'), findsOneWidget);
+    });
+
+    testWidgets('sending downloads and includes the original attachment when the checkbox is checked',
+        (tester) async {
+      _growViewport(tester);
+      const attachment =
+          MailAttachment(id: 1, messageId: 42, filename: 'invoice.pdf', mimeType: 'application/pdf', size: 3);
+      final repository = MockMailRepository();
+      when(() => repository.downloadAttachment(any(), any(), any(), any())).thenAnswer((_) async => [1, 2, 3]);
+      when(() => repository.recordAttachmentLocalPath(any(), any())).thenAnswer((_) async {});
+      ComposedMessage? sent;
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          documentsDirectoryProvider.overrideWith((ref) async => tempDir),
+          sendMessageProvider.overrideWithValue((MailAccount a, ComposedMessage m) async {
+            sent = m;
+          }),
+        ],
+        child: MaterialApp(
+          home: ComposeScreen(
+            accountId: 1,
+            folder: folder,
+            forwardOf: forwardMessage(),
+            forwardAttachments: const [attachment],
+          ),
+        ),
+      ));
+
+      await tester.enterText(find.byKey(const Key('toField')), 'bob@example.com');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Send'));
+      await tester.pumpAndSettle();
+
+      expect(sent, isNotNull);
+      expect(sent!.attachmentFilePaths, hasLength(1));
+      expect(sent!.attachmentFilePaths.single, endsWith('invoice.pdf'));
+      verify(() => repository.downloadAttachment(any(), any(), any(), any())).called(1);
+    });
+
+    testWidgets(
+        'sending excludes the original attachment when the checkbox is unchecked, without downloading it',
+        (tester) async {
+      _growViewport(tester);
+      const attachment =
+          MailAttachment(id: 1, messageId: 42, filename: 'invoice.pdf', mimeType: 'application/pdf', size: 3);
+      final repository = MockMailRepository();
+      when(() => repository.downloadAttachment(any(), any(), any(), any())).thenAnswer((_) async => [1, 2, 3]);
+      ComposedMessage? sent;
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          sendMessageProvider.overrideWithValue((MailAccount a, ComposedMessage m) async {
+            sent = m;
+          }),
+        ],
+        child: MaterialApp(
+          home: ComposeScreen(
+            accountId: 1,
+            folder: folder,
+            forwardOf: forwardMessage(),
+            forwardAttachments: const [attachment],
+          ),
+        ),
+      ));
+
+      await tester.enterText(find.byKey(const Key('toField')), 'bob@example.com');
+      await tester.tap(find.text('Include 1 original attachment'));
+      await tester.pump();
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Send'));
+      await tester.pumpAndSettle();
+
+      expect(sent, isNotNull);
+      expect(sent!.attachmentFilePaths, isEmpty);
+      verifyNever(() => repository.downloadAttachment(any(), any(), any(), any()));
+    });
+
+    testWidgets('reuses an already-downloaded original attachment instead of re-downloading it',
+        (tester) async {
+      _growViewport(tester);
+      const attachment = MailAttachment(
+        id: 1,
+        messageId: 42,
+        filename: 'invoice.pdf',
+        mimeType: 'application/pdf',
+        size: 3,
+        localPath: '/already/downloaded/invoice.pdf',
+      );
+      final repository = MockMailRepository();
+      ComposedMessage? sent;
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          sendMessageProvider.overrideWithValue((MailAccount a, ComposedMessage m) async {
+            sent = m;
+          }),
+        ],
+        child: MaterialApp(
+          home: ComposeScreen(
+            accountId: 1,
+            folder: folder,
+            forwardOf: forwardMessage(),
+            forwardAttachments: const [attachment],
+          ),
+        ),
+      ));
+
+      await tester.enterText(find.byKey(const Key('toField')), 'bob@example.com');
+      await tester.pump();
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Send'));
+      await tester.pumpAndSettle();
+
+      expect(sent, isNotNull);
+      expect(sent!.attachmentFilePaths, ['/already/downloaded/invoice.pdf']);
+      verifyNever(() => repository.downloadAttachment(any(), any(), any(), any()));
+    });
   });
 }
