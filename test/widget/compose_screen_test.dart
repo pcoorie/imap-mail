@@ -160,5 +160,54 @@ void main() {
         expect(bodyField.controller!.text, contains('HTML-only body content'));
       },
     );
+
+    testWidgets(
+      'collapses the pretty-printed whitespace an HTML email leaves behind after tag-stripping '
+      '(regression: real forwarded content ended up 400+ characters of blank lines down, '
+      'making the compose body look empty at a glance)',
+      (tester) async {
+        _growViewport(tester);
+        // Shaped like a real HTML email's source: lots of indentation/blank
+        // lines between tags before any real text appears — exactly what
+        // stripHtml (tag removal only, no whitespace normalization) leaves
+        // behind untouched.
+        final html = '<html><body>\r\n'
+            '${'    \r\n' * 20}'
+            '<p>The real content, buried under indentation.</p>\r\n'
+            '${'    \r\n' * 10}'
+            '</body></html>';
+        await tester.pumpWidget(ProviderScope(
+          child: MaterialApp(
+            home: ComposeScreen(accountId: 1, forwardOf: messageWith(bodyHtml: html)),
+          ),
+        ));
+
+        final bodyField = tester.widget<TextField>(find.byKey(const Key('bodyField')));
+        final text = bodyField.controller!.text;
+        expect(text, contains('The real content, buried under indentation.'));
+        // The whole point: that line must be reachable near the top, not
+        // pushed hundreds of characters down by uncollapsed blank lines.
+        expect(text.indexOf('The real content'), lessThan(50));
+      },
+    );
+
+    testWidgets(
+      'collapses blank-line runs in a plain-text body too, not just HTML '
+      '(some senders template bodyText with the same padding)',
+      (tester) async {
+        _growViewport(tester);
+        final bodyText = '${'  \r\n' * 20}Hi Peter,${'\r\n' * 5}Real content here.';
+        await tester.pumpWidget(ProviderScope(
+          child: MaterialApp(
+            home: ComposeScreen(accountId: 1, forwardOf: messageWith(bodyText: bodyText)),
+          ),
+        ));
+
+        final bodyField = tester.widget<TextField>(find.byKey(const Key('bodyField')));
+        final text = bodyField.controller!.text;
+        expect(text, contains('Hi Peter,'));
+        expect(text.indexOf('Hi Peter,'), lessThan(20));
+      },
+    );
   });
 }

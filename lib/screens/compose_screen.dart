@@ -9,11 +9,37 @@ import '../providers/message_providers.dart';
 import '../utils/html_text.dart';
 
 /// The body text to quote when forwarding [message]: its plain-text part
-/// when it has one, otherwise its HTML part with tags stripped. A
-/// text/plain-only fallback here left HTML-only messages (common — plenty
-/// of real mail has no text/plain part at all) forwarding with an empty
-/// quoted body, since bodyText is simply null for those.
-String _quotedBody(MailMessage message) => message.bodyText ?? stripHtml(message.bodyHtml ?? '');
+/// when it has one, otherwise its HTML part with tags stripped (a
+/// text/plain-only fallback here left HTML-only messages — common, plenty
+/// of real mail has no text/plain part at all — forwarding with an empty
+/// quoted body, since bodyText is simply null for those), with blank-line
+/// runs collapsed either way.
+String _quotedBody(MailMessage message) =>
+    _collapseBlankLines(message.bodyText ?? stripHtml(message.bodyHtml ?? ''));
+
+/// Trims each line and collapses runs of blank lines down to a single one,
+/// then trims the whole result.
+///
+/// Real mail routinely carries dozens of blank/whitespace-only lines before
+/// any actual content — an HTML message's pretty-printed indentation is
+/// still there once stripHtml removes only the tags, and even some
+/// senders' plain-text parts are themselves templated with the same
+/// padding. Left uncollapsed, a forwarded message's real content can end up
+/// so far down the quoted body that it looks completely empty at a glance
+/// — confirmed live: a real forwarded message's quoted body started with
+/// over 400 characters of blank lines before its first visible word.
+String _collapseBlankLines(String text) {
+  final lines = text.split(RegExp(r'\r\n|\r|\n')).map((line) => line.trim());
+  final result = <String>[];
+  var lastWasBlank = false;
+  for (final line in lines) {
+    final isBlank = line.isEmpty;
+    if (isBlank && lastWasBlank) continue;
+    result.add(line);
+    lastWasBlank = isBlank;
+  }
+  return result.join('\n').trim();
+}
 
 class ComposeScreen extends ConsumerStatefulWidget {
   const ComposeScreen({super.key, required this.accountId, this.replyTo, this.forwardOf});
