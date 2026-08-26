@@ -6,6 +6,14 @@ import '../models/mail_message.dart';
 import '../providers/account_providers.dart';
 import '../providers/compose_providers.dart';
 import '../providers/message_providers.dart';
+import '../utils/html_text.dart';
+
+/// The body text to quote when forwarding [message]: its plain-text part
+/// when it has one, otherwise its HTML part with tags stripped. A
+/// text/plain-only fallback here left HTML-only messages (common — plenty
+/// of real mail has no text/plain part at all) forwarding with an empty
+/// quoted body, since bodyText is simply null for those.
+String _quotedBody(MailMessage message) => message.bodyText ?? stripHtml(message.bodyHtml ?? '');
 
 class ComposeScreen extends ConsumerStatefulWidget {
   const ComposeScreen({super.key, required this.accountId, this.replyTo, this.forwardOf});
@@ -41,7 +49,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               : 'Fwd: ${source.subject}',
     );
     _body = TextEditingController(
-      text: widget.forwardOf != null ? '\n\n---\n${widget.forwardOf!.bodyText ?? ''}' : '',
+      text: widget.forwardOf != null ? '\n\n---\n${_quotedBody(widget.forwardOf!)}' : '',
     );
     for (final controller in [_to, _cc, _bcc, _subject, _body]) {
       controller.addListener(() => setState(() {}));

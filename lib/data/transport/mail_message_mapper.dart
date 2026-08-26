@@ -1,11 +1,12 @@
 import 'package:enough_mail/enough_mail.dart';
 import '../../models/mail_attachment.dart';
 import '../../models/mail_message.dart';
+import '../../utils/html_text.dart';
 
 MailMessage mapMimeMessageToRecord(MimeMessage mime, {required int folderId}) {
   final bodyText = mime.decodeTextPlainPart();
   final bodyHtml = mime.decodeTextHtmlPart();
-  final snippetSource = bodyText ?? _stripHtml(bodyHtml ?? '');
+  final snippetSource = bodyText ?? stripHtml(bodyHtml ?? '');
   final snippet = snippetSource.trim().length > 140
       ? '${snippetSource.trim().substring(0, 140)}...'
       : snippetSource.trim();
@@ -68,5 +69,3 @@ List<MailAttachment> mapMimeMessageAttachments(MimeMessage mime, {required int m
     );
   }).toList();
 }
-
-String _stripHtml(String html) => html.replaceAll(RegExp('<[^>]*>'), '');

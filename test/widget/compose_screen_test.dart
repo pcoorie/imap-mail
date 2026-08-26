@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:imap_mail/data/transport/mail_sender.dart';
 import 'package:imap_mail/models/enums.dart';
 import 'package:imap_mail/models/mail_account.dart';
+import 'package:imap_mail/models/mail_message.dart';
 import 'package:imap_mail/providers/account_providers.dart';
 import 'package:imap_mail/providers/compose_providers.dart';
 import 'package:imap_mail/screens/compose_screen.dart';
@@ -110,5 +111,54 @@ void main() {
 
     expect(find.textContaining('smtp unreachable'), findsOneWidget);
     expect(find.text('Hello Bob'), findsOneWidget); // body field still has the content
+  });
+
+  group('forwarding', () {
+    MailMessage messageWith({String? bodyText, String? bodyHtml}) => MailMessage(
+          folderId: 1,
+          uid: 1,
+          subject: 'Original subject',
+          from: 'alice@example.com',
+          to: 'me@example.com',
+          date: DateTime(2026, 1, 1),
+          snippet: 'snippet',
+          bodyText: bodyText,
+          bodyHtml: bodyHtml,
+          isDownloaded: true,
+        );
+
+    testWidgets('quotes the plain-text body when the message has one', (tester) async {
+      _growViewport(tester);
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+          home: ComposeScreen(
+            accountId: 1,
+            forwardOf: messageWith(bodyText: 'Plain body content'),
+          ),
+        ),
+      ));
+
+      final bodyField = tester.widget<TextField>(find.byKey(const Key('bodyField')));
+      expect(bodyField.controller!.text, contains('Plain body content'));
+    });
+
+    testWidgets(
+      'falls back to the HTML body, stripped of tags, when the message has no plain-text part '
+      '(regression: forwarding an HTML-only message used to produce an empty quoted body)',
+      (tester) async {
+        _growViewport(tester);
+        await tester.pumpWidget(ProviderScope(
+          child: MaterialApp(
+            home: ComposeScreen(
+              accountId: 1,
+              forwardOf: messageWith(bodyHtml: '<p>HTML-only body content</p>'),
+            ),
+          ),
+        ));
+
+        final bodyField = tester.widget<TextField>(find.byKey(const Key('bodyField')));
+        expect(bodyField.controller!.text, contains('HTML-only body content'));
+      },
+    );
   });
 }
