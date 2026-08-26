@@ -34,10 +34,15 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   String? _error;
   bool _retrying = false;
 
+  // Tracked so _forward() can await whichever _load() call is currently in
+  // flight (the initial one, or a Retry's) instead of racing it — see
+  // _forward's own doc comment.
+  Future<void>? _loadFuture;
+
   @override
   void initState() {
     super.initState();
-    _load();
+    _loadFuture = _load();
   }
 
   Future<void> _load() async {
@@ -84,6 +89,28 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
         setState(() => _error = 'Could not load message: $e');
       }
     }
+  }
+
+  /// Pushes ComposeScreen to forward this message, first waiting for
+  /// whichever _load() call is currently in flight.
+  ///
+  /// Without this, tapping the AppBar's Forward icon — which is enabled the
+  /// instant the screen appears, before _load()'s body fetch has finished —
+  /// forwarded `widget.message`: the un-hydrated row from the list, whose
+  /// bodyText/bodyHtml are both null until a message has actually been
+  /// opened once. The result was a forwarded email with no content at all,
+  /// just the "---" quote separator.
+  Future<void> _forward() async {
+    await _loadFuture;
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ComposeScreen(
+          accountId: widget.folder.accountId,
+          forwardOf: _resolved ?? widget.message,
+        ),
+      ),
+    );
   }
 
   Future<void> _confirmDelete() async {
@@ -223,12 +250,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.forward),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => ComposeScreen(
-                accountId: widget.folder.accountId,
-                forwardOf: message,
-              )),
-            ),
+            onPressed: _forward,
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
@@ -246,7 +268,10 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
                     child: Text(_error!, textAlign: TextAlign.center),
                   ),
                   const SizedBox(height: 12),
-                  ElevatedButton(onPressed: _load, child: const Text('Retry')),
+                  ElevatedButton(
+                    onPressed: () => _loadFuture = _load(),
+                    child: const Text('Retry'),
+                  ),
                 ],
               ),
             )
