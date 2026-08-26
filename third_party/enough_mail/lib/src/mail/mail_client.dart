@@ -2992,6 +2992,27 @@ class _IncomingImapClient extends _IncomingMailClient {
           action: StoreAction.add,
         );
       }
+      // Cobalt Mail patch: a server without the MOVE capability only gets
+      // here as COPY + \Deleted — the original message is flagged but still
+      // physically present in the source mailbox until it's expunged.
+      // Unlike MailClient.deleteMessages (which deliberately skips this so
+      // its own undoMove() can restore the flagged-but-not-yet-expunged
+      // original), Cobalt never calls that undo API — its own Undo does a
+      // fresh reverse move instead — so leaving the original un-expunged
+      // here serves no purpose and is a real bug: other IMAP clients
+      // syncing the same mailbox still see the "moved" message sitting in
+      // its original folder, because it was never actually removed from
+      // the server. Finish the move by expunging it. Prefer a UID-scoped
+      // expunge (removes exactly the messages just flagged) when the
+      // server supports UIDPLUS; fall back to a full EXPUNGE otherwise —
+      // still correct, since EXPUNGE only ever removes \Deleted-flagged
+      // messages, matching the granularity the MOVE-capable branch above
+      // already provides atomically.
+      if (sequence.isUidSequence && _imapClient.serverInfo.supportsUidPlus) {
+        await _imapClient.uidExpunge(sequence);
+      } else {
+        await _imapClient.expunge();
+      }
     }
     _selectedMailbox?.messagesExists -= sequence.length;
     final targetSequence = imapResult.responseCodeCopyUid?.targetSequence;
