@@ -12,6 +12,16 @@ import '../secure/credential_store.dart';
 import '../transport/mail_transport.dart';
 import '../transport/mail_sender.dart';
 
+/// The outcome of a bulk [MailRepository.moveMessages]/[MailRepository.deleteMessages]
+/// call: proceed-and-report, not all-or-nothing — some messages in a batch
+/// can succeed while others fail. [failed] is keyed by message id.
+class BulkResult {
+  const BulkResult({required this.succeeded, required this.failed});
+
+  final List<MailMessage> succeeded;
+  final Map<int, Object> failed;
+}
+
 class MailRepository {
   MailRepository(
     this._folderDao,
@@ -371,6 +381,80 @@ class MailRepository {
     // move-to-Trash case via its own recompute of both folders).
     await _refreshUnreadCount(currentFolder.id!);
     return message;
+  }
+
+  /// Bulk version of [moveMessage]: moves every message in [messages] from
+  /// [from] to [to], batched over a single [MailTransport] connection
+  /// (`_transport.moveMessages`) rather than one connection per message.
+  /// Proceed-and-report: one message's server-side failure reverts only
+  /// that message, not the rest of the batch (see [BulkResult]).
+  Future<BulkResult> moveMessages(
+    MailAccount account,
+    MailFolder from,
+    MailFolder to,
+    List<MailMessage> messages,
+  ) async {
+    for (final message in messages) {
+      await _messageDao.moveToFolder(message.id!, to.id!);
+    }
+    await _refreshUnreadCount(from.id!);
+    await _refreshUnreadCount(to.id!);
+
+    Map<int, int?> newUids;
+    try {
+      final password = await _passwordFor(account);
+      newUids = await _transport.moveMessages(account, password, from, messages, to);
+    } catch (_) {
+      // The whole batch's connection/setup failed before any per-message
+      // result could be determined (offline, destination not found, etc.)
+      // — treat every message in the batch as failed.
+      newUids = const {};
+    }
+
+    final succeeded = <MailMessage>[];
+    final failed = <int, Object>{};
+    for (final message in messages) {
+      final id = message.id!;
+      if (newUids.containsKey(id)) {
+        final newUid = newUids[id];
+        if (newUid != null) {
+          await _messageDao.moveToFolder(id, to.id!, newUid: newUid);
+        }
+        succeeded.add(message.copyWith(folderId: to.id!, uid: newUid ?? message.uid));
+      } else {
+        failed[id] = StateError('Failed to move message $id to ${to.name}');
+        // Restore the ORIGINAL uid, exactly like moveMessage's single-message
+        // revert — never let MessageDao.moveToFolder synthesize a fresh
+        // placeholder and destroy the message's real server uid.
+        await _messageDao.moveToFolder(id, from.id!, newUid: message.uid);
+      }
+    }
+    await _refreshUnreadCount(from.id!);
+    await _refreshUnreadCount(to.id!);
+    return BulkResult(succeeded: succeeded, failed: failed);
+  }
+
+  /// Bulk version of [deleteMessage]: moves every message in [messages] to
+  /// Trash via [moveMessages], or permanently removes them all locally when
+  /// there's no Trash folder to move them to, or when [currentFolder] is
+  /// already Trash — same fallback rules as [deleteMessage], applied once
+  /// for the whole batch (they depend only on the account/folder, not on
+  /// which messages are selected).
+  Future<BulkResult> deleteMessages(
+    MailAccount account,
+    MailFolder currentFolder,
+    List<MailMessage> messages,
+  ) async {
+    final folders = await _folderDao.getForAccount(currentFolder.accountId);
+    final trashFolder = folders.where((f) => f.type == MailFolderType.trash).firstOrNull;
+    if (trashFolder != null && trashFolder.id != currentFolder.id) {
+      return moveMessages(account, currentFolder, trashFolder, messages);
+    }
+    for (final message in messages) {
+      await _messageDao.deleteMessage(message.id!);
+    }
+    await _refreshUnreadCount(currentFolder.id!);
+    return BulkResult(succeeded: messages, failed: const {});
   }
 
   Future<void> retryFailedMessage(MailAccount account, MailMessage failedMessage) async {

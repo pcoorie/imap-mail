@@ -1,16 +1,22 @@
+import 'dart:async';
+
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
+import '../data/repository/mail_repository.dart';
 import '../models/enums.dart';
 import '../models/mail_account.dart';
 import '../models/mail_folder.dart';
+import '../models/mail_message.dart';
 import '../providers/account_providers.dart';
 import '../providers/folder_providers.dart';
 import '../providers/message_providers.dart';
+import '../providers/repository_providers.dart';
 import '../providers/sync_status_providers.dart';
 import '../providers/swipe_action_providers.dart';
 import '../widgets/empty_folder_state.dart';
+import '../widgets/folder_picker_sheet.dart';
 import '../widgets/folder_tab_bar.dart';
 import '../widgets/folder_tree_expander.dart';
 import '../widgets/message_list_tile.dart';
@@ -19,6 +25,7 @@ import '../widgets/sync_error_banner.dart';
 import 'account_form_screen.dart';
 import 'compose_screen.dart';
 import 'message_detail_screen.dart';
+import 'search_screen.dart';
 import 'settings_screen.dart';
 
 class FolderViewScreen extends ConsumerStatefulWidget {
@@ -32,36 +39,220 @@ class FolderViewScreen extends ConsumerStatefulWidget {
 
 class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
   MailFolder? _selected;
+  bool _selecting = false;
+  final Set<int> _selectedIds = {};
+
+  // See _showAutoDismissingSnackBar's doc comment for why this exists —
+  // same rationale and pattern as MessageSwipeController's own field.
+  Timer? _snackBarDismissTimer;
+
+  @override
+  void dispose() {
+    _snackBarDismissTimer?.cancel();
+    super.dispose();
+  }
+
+  MailFolder? _currentFolder(List<MailFolder>? folders) {
+    if (folders == null) return null;
+    final defaults = <MailFolder>[
+      for (final type in [
+        MailFolderType.inbox,
+        MailFolderType.sent,
+        MailFolderType.trash,
+      ])
+        ...folders.where((f) => f.type == type),
+    ];
+    return _selected ??
+        (defaults.isNotEmpty ? defaults.first : (folders.isNotEmpty ? folders.first : null));
+  }
+
+  void _enterSelection(int id) => setState(() {
+        _selecting = true;
+        _selectedIds.add(id);
+      });
+
+  void _toggleSelection(int id) => setState(() {
+        if (!_selectedIds.remove(id)) {
+          _selectedIds.add(id);
+        }
+        if (_selectedIds.isEmpty) {
+          _selecting = false;
+        }
+      });
+
+  void _exitSelection() => setState(() {
+        _selecting = false;
+        _selectedIds.clear();
+      });
+
+  /// Shows [snackBar] via [messenger] and guarantees it disappears after
+  /// [snackBar]'s own `duration`, even if its built-in auto-dismiss timer
+  /// doesn't fire — see MessageSwipeController._showAutoDismissingSnackBar
+  /// for the same workaround and why it exists. Also clears any snackbar
+  /// already showing/queued first, so a new bulk action's feedback is never
+  /// stuck waiting behind a stale one.
+  void _showAutoDismissingSnackBar(ScaffoldMessengerState messenger, SnackBar snackBar) {
+    _snackBarDismissTimer?.cancel();
+    messenger.clearSnackBars();
+    messenger.showSnackBar(snackBar);
+    _snackBarDismissTimer = Timer(snackBar.duration, () {
+      if (messenger.mounted) {
+        messenger.hideCurrentSnackBar();
+      }
+    });
+  }
+
+  void _showBulkResultSnackBar(BulkResult result, {required String verb}) {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    final succeededCount = result.succeeded.length;
+    final failedCount = result.failed.length;
+    final String text;
+    if (failedCount == 0) {
+      text = '$succeededCount $verb';
+    } else if (succeededCount == 0) {
+      text = "Couldn't move $failedCount message${failedCount == 1 ? '' : 's'}";
+    } else {
+      text = '$succeededCount moved, $failedCount failed';
+    }
+    _showAutoDismissingSnackBar(messenger, SnackBar(content: Text(text)));
+  }
+
+  Future<void> _bulkDelete(MailFolder folder) async {
+    final messages = ref.read(messagesProvider(folder)).valueOrNull ?? const <MailMessage>[];
+    final selected = messages.where((m) => _selectedIds.contains(m.id)).toList();
+    _exitSelection();
+    if (selected.isEmpty) return;
+    final account = _findAccount();
+    if (account == null) return;
+    // Mirrors MailRepository.deleteMessage/deleteMessages' own branch
+    // condition exactly: a Trash folder exists and it isn't the folder
+    // already being viewed. Anything else is a PERMANENT local-only
+    // removal (no Trash to catch it, or already viewing Trash) — the
+    // summary snackbar must say so, not claim a move that never happened.
+    final allFolders = ref.read(foldersProvider(widget.accountId)).valueOrNull ?? const <MailFolder>[];
+    final trashFolder = allFolders.firstWhereOrNull((f) => f.type == MailFolderType.trash);
+    final movesToTrash = trashFolder != null && trashFolder.id != folder.id;
+    try {
+      final repository = await ref.read(mailRepositoryProvider.future);
+      final result = await repository.deleteMessages(account, folder, selected);
+      if (!mounted) return;
+      ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
+      _showBulkResultSnackBar(result, verb: movesToTrash ? 'moved to Trash' : 'deleted');
+    } catch (e) {
+      if (!mounted) return;
+      // Match performSwipeAction's catch block: refresh the list/unread count
+      // even on failure, since the repository call may have partially
+      // committed local DB changes before the error was thrown.
+      ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger == null) return;
+      _showAutoDismissingSnackBar(messenger, SnackBar(content: Text("Couldn't delete — $e")));
+    }
+  }
+
+  Future<void> _bulkMove(MailFolder folder, List<MailFolder> allFolders) async {
+    final destination = await showFolderPicker(
+      context,
+      allFolders.where((f) => f.id != folder.id).toList(),
+    );
+    if (destination == null) return;
+    final messages = ref.read(messagesProvider(folder)).valueOrNull ?? const <MailMessage>[];
+    final selected = messages.where((m) => _selectedIds.contains(m.id)).toList();
+    _exitSelection();
+    if (selected.isEmpty) return;
+    final account = _findAccount();
+    if (account == null) return;
+    try {
+      final repository = await ref.read(mailRepositoryProvider.future);
+      final result = await repository.moveMessages(account, folder, destination, selected);
+      if (!mounted) return;
+      ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
+      _showBulkResultSnackBar(result, verb: 'moved to ${destination.name}');
+    } catch (e) {
+      if (!mounted) return;
+      // Match _bulkDelete's/performSwipeAction's catch block: refresh the
+      // list/unread count even on failure, since the repository call may
+      // have partially committed local DB changes before the error was
+      // thrown.
+      ref.invalidate(messagesProvider(folder));
+      ref.read(unreadCountRefreshTickProvider.notifier).state++;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger == null) return;
+      _showAutoDismissingSnackBar(messenger, SnackBar(content: Text("Couldn't move — $e")));
+    }
+  }
+
+  PreferredSizeWidget _buildDefaultAppBar() {
+    return AppBar(
+      title: const Text('Mail'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search),
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SearchScreen())),
+        ),
+        // Single-account routing (app.dart) skips AccountListScreen
+        // entirely — its gear icon was the only path to SettingsScreen,
+        // so a single-account user would otherwise have no way to reach
+        // theme/swipe-action settings at all.
+        IconButton(
+          icon: const Icon(Icons.settings_outlined),
+          onPressed: () => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
+        ),
+      ],
+    );
+  }
+
+  PreferredSizeWidget _buildSelectionAppBar(MailFolder current, List<MailFolder> allFolders) {
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        tooltip: 'Cancel selection',
+        onPressed: _exitSelection,
+      ),
+      title: Text('${_selectedIds.length} selected'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.folder_outlined),
+          tooltip: 'Move to folder',
+          onPressed: () => _bulkMove(current, allFolders),
+        ),
+        IconButton(
+          icon: const Icon(Icons.delete_outline),
+          tooltip: 'Delete',
+          onPressed: () => _bulkDelete(current),
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final foldersAsync = ref.watch(foldersProvider(widget.accountId));
     final syncError = ref.watch(syncErrorProvider(widget.accountId));
+    final current = _currentFolder(foldersAsync.valueOrNull);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mail'),
-        actions: [
-          // Single-account routing (app.dart) skips AccountListScreen
-          // entirely — its gear icon was the only path to SettingsScreen,
-          // so a single-account user would otherwise have no way to reach
-          // theme/swipe-action settings at all.
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
-          ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ComposeScreen(accountId: widget.accountId),
-          ),
-        ),
-        child: const Icon(Icons.edit),
-      ),
+      appBar: _selecting && current != null
+          ? _buildSelectionAppBar(current, foldersAsync.valueOrNull ?? const [])
+          : _buildDefaultAppBar(),
+      floatingActionButton: _selecting
+          ? null
+          : FloatingActionButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => ComposeScreen(accountId: widget.accountId),
+                ),
+              ),
+              child: const Icon(Icons.edit),
+            ),
       body: foldersAsync.when(
         data: (folders) {
           final defaults = <MailFolder>[
@@ -73,11 +264,7 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
               ...folders.where((f) => f.type == type),
           ];
           final rest = folders.where((f) => !defaults.contains(f)).toList();
-          final current =
-              _selected ??
-              (defaults.isNotEmpty
-                  ? defaults.first
-                  : (folders.isNotEmpty ? folders.first : null));
+          final current = _currentFolder(folders);
 
           return Column(
             children: [
@@ -113,7 +300,11 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
                 child: FolderTabBar(
                   folders: defaults,
                   selected: current,
-                  onSelect: (folder) => setState(() => _selected = folder),
+                  onSelect: (folder) => setState(() {
+                    _selected = folder;
+                    _selecting = false;
+                    _selectedIds.clear();
+                  }),
                 ),
               ),
               // Bounded + scrollable: FolderTreeExpander's expanded list is a
@@ -128,13 +319,25 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
                 child: SingleChildScrollView(
                   child: FolderTreeExpander(
                     folders: rest,
-                    onSelect: (folder) => setState(() => _selected = folder),
+                    onSelect: (folder) => setState(() {
+                      _selected = folder;
+                      _selecting = false;
+                      _selectedIds.clear();
+                    }),
                   ),
                 ),
               ),
               const Divider(height: 1),
               if (current != null)
-                Expanded(child: _MessageList(folder: current)),
+                Expanded(
+                  child: _MessageList(
+                    folder: current,
+                    selecting: _selecting,
+                    selectedIds: _selectedIds,
+                    onEnterSelection: _enterSelection,
+                    onToggleSelection: _toggleSelection,
+                  ),
+                ),
             ],
           );
         },
@@ -163,9 +366,19 @@ class _FolderViewScreenState extends ConsumerState<FolderViewScreen> {
 }
 
 class _MessageList extends ConsumerStatefulWidget {
-  const _MessageList({required this.folder});
+  const _MessageList({
+    required this.folder,
+    required this.selecting,
+    required this.selectedIds,
+    required this.onEnterSelection,
+    required this.onToggleSelection,
+  });
 
   final MailFolder folder;
+  final bool selecting;
+  final Set<int> selectedIds;
+  final ValueChanged<int> onEnterSelection;
+  final ValueChanged<int> onToggleSelection;
 
   @override
   ConsumerState<_MessageList> createState() => _MessageListState();
@@ -209,6 +422,14 @@ class _MessageListState extends ConsumerState<_MessageList> {
     return messagesAsync.when(
       data: (messages) {
         _pendingRemoval.retainAll(messages.map((m) => m.id).whereType<int>());
+        // `widget.selectedIds` is the SAME Set instance _FolderViewScreenState
+        // owns (passed down, not copied) — mutating it here drops a
+        // since-vanished message from the selection immediately, per the
+        // design spec. This doesn't itself call the parent's setState, so
+        // the app bar's "N selected" count can lag by one frame until the
+        // next selection change triggers a rebuild — acceptable for this
+        // rare edge case (a sync/refresh removing a selected message).
+        widget.selectedIds.retainAll(messages.map((m) => m.id).whereType<int>());
         final visible = messages
             .where((m) => !_pendingRemoval.contains(m.id))
             .toList();
@@ -273,6 +494,25 @@ class _MessageListState extends ConsumerState<_MessageList> {
                     if (account == null) {
                       return const Center(child: CircularProgressIndicator());
                     }
+                    final tile = MessageListTile(
+                      key: ValueKey(message.id),
+                      message: message,
+                      selected: widget.selecting ? widget.selectedIds.contains(message.id) : null,
+                      onLongPress: () => widget.onEnterSelection(message.id!),
+                      onTap: widget.selecting
+                          ? () => widget.onToggleSelection(message.id!)
+                          : () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => MessageDetailScreen(
+                                    folder: folder,
+                                    message: message,
+                                  ),
+                                ),
+                              ),
+                    );
+                    if (widget.selecting) {
+                      return tile;
+                    }
                     return Slidable(
                       key: ValueKey(message.id),
                       startActionPane: _swipeController.buildActionPane(
@@ -293,17 +533,7 @@ class _MessageListState extends ConsumerState<_MessageList> {
                         onRemoved: (id) =>
                             setState(() => _pendingRemoval.add(id)),
                       ),
-                      child: MessageListTile(
-                        message: message,
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => MessageDetailScreen(
-                              folder: folder,
-                              message: message,
-                            ),
-                          ),
-                        ),
-                      ),
+                      child: tile,
                     );
                   },
                 ),

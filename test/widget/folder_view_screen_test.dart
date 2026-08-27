@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,6 +19,8 @@ import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/providers/swipe_action_providers.dart';
 import 'package:imap_mail/providers/theme_providers.dart';
 import 'package:imap_mail/screens/folder_view_screen.dart';
+import 'package:imap_mail/screens/message_detail_screen.dart';
+import 'package:imap_mail/screens/search_screen.dart';
 import 'package:imap_mail/screens/settings_screen.dart';
 
 class _FakeAccountsNotifier extends AccountsNotifier {
@@ -72,6 +75,7 @@ void main() {
     registerFallbackValue(account);
     registerFallbackValue(inbox);
     registerFallbackValue(message);
+    registerFallbackValue(<MailMessage>[]);
   });
 
   testWidgets('shows Inbox/Sent/Trash by default, Archive hidden until expanded', (tester) async {
@@ -677,5 +681,444 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.byType(CircularProgressIndicator), findsWidgets);
+  });
+
+  testWidgets('the app bar search icon opens SearchScreen', (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash, archive]),
+        messagesProvider.overrideWith((ref, folder) async => const []),
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SearchScreen), findsOneWidget);
+  });
+
+  group('multi-select and bulk actions', () {
+    testWidgets('long-pressing a row enters selection mode with a contextual app bar', (tester) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 selected'), findsOneWidget);
+      expect(find.byIcon(Icons.close), findsOneWidget);
+      expect(find.byIcon(Icons.delete_outline), findsOneWidget);
+    });
+
+    testWidgets('tapping another row while selecting adds it and updates the count instead of opening it',
+        (tester) async {
+      final second = message.copyWith(id: 101, uid: 2, subject: 'Second');
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message, second] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Second'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('2 selected'), findsOneWidget);
+      expect(find.byType(MessageDetailScreen), findsNothing);
+    });
+
+    testWidgets('tapping the X exits selection mode and restores the normal app bar', (tester) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mail'), findsOneWidget);
+      expect(find.byIcon(Icons.search), findsOneWidget);
+    });
+
+    testWidgets('deselecting the last selected row automatically exits selection mode', (tester) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Hello'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mail'), findsOneWidget);
+    });
+
+    testWidgets('swipe actions are disabled while selecting (a drag does not trigger the swipe delete)',
+        (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.deleteMessage(any(), any(), any()))
+          .thenAnswer((_) async => message.copyWith(folderId: trash.id!));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      expect(find.byType(Slidable), findsNothing);
+
+      await tester.timedDrag(find.text('Hello'), const Offset(700, 0), const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+
+      verifyNever(() => repository.deleteMessage(any(), any(), any()));
+    });
+
+    testWidgets('tapping Delete bulk-deletes every selected message and exits selection mode', (tester) async {
+      final repository = MockMailRepository();
+      final second = message.copyWith(id: 101, uid: 2, subject: 'Second');
+      when(() => repository.deleteMessages(any(), any(), any()))
+          .thenAnswer((_) async => const BulkResult(succeeded: [], failed: {}));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message, second] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Second'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      verify(() => repository.deleteMessages(account, inbox, [message, second])).called(1);
+      expect(find.text('Mail'), findsOneWidget);
+    });
+
+    testWidgets('a bulk-delete call that throws reports the failure instead of crashing', (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.deleteMessages(any(), any(), any()))
+          .thenThrow(Exception('offline'));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining("Couldn't delete"), findsOneWidget);
+    });
+
+    testWidgets('the bulk delete summary snackbar never offers an Undo action', (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.deleteMessages(any(), any(), any()))
+          .thenAnswer((_) async => BulkResult(succeeded: [message], failed: const {}));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('moved to Trash'), findsOneWidget);
+      expect(find.text('Undo'), findsNothing);
+    });
+
+    testWidgets('switching folder tabs while selecting exits selection mode and restores the normal app bar',
+        (tester) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      expect(find.text('1 selected'), findsOneWidget);
+
+      await tester.tap(find.text('Sent'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mail'), findsOneWidget);
+      expect(find.textContaining('selected'), findsNothing);
+    });
+
+    testWidgets('a bulk delete where every message failed reports it without an Undo action', (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.deleteMessages(any(), any(), any()))
+          .thenAnswer((_) async => BulkResult(succeeded: const [], failed: {100: Exception('offline')}));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining("Couldn't move 1 message"), findsOneWidget);
+      expect(find.text('Undo'), findsNothing);
+    });
+
+    testWidgets('a partial bulk-delete failure reports both counts in the summary snackbar', (tester) async {
+      final repository = MockMailRepository();
+      final second = message.copyWith(id: 101, uid: 2, subject: 'Second');
+      when(() => repository.deleteMessages(any(), any(), any()))
+          .thenAnswer((_) async => BulkResult(succeeded: [message], failed: {101: Exception('offline')}));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message, second] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Second'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('1 moved, 1 failed'), findsOneWidget);
+    });
+
+    testWidgets(
+        'tapping Move to folder opens the folder picker and bulk-moves selected messages to the chosen folder',
+        (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.moveMessages(any(), any(), any(), any())).thenAnswer(
+        (_) async => BulkResult(succeeded: [message.copyWith(folderId: trash.id!)], failed: const {}),
+      );
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.folder_outlined));
+      await tester.pumpAndSettle();
+
+      // "Trash" also appears as a background folder tab — scope to the
+      // picker's own bottom sheet (see the "excludes the folder currently
+      // being viewed" test below for the same collision with Inbox/Sent).
+      final trashInSheet = find.descendant(of: find.byType(BottomSheet), matching: find.text('Trash'));
+      expect(trashInSheet, findsOneWidget);
+      await tester.tap(trashInSheet);
+      await tester.pumpAndSettle();
+
+      verify(() => repository.moveMessages(account, inbox, trash, [message])).called(1);
+      expect(find.textContaining('moved to Trash'), findsOneWidget);
+    });
+
+    testWidgets('the folder picker excludes the folder currently being viewed', (tester) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.folder_outlined));
+      await tester.pumpAndSettle();
+
+      // "Inbox" (the folder being viewed) also appears as a background tab —
+      // scope the check to the picker's own bottom sheet.
+      expect(find.descendant(of: find.byType(BottomSheet), matching: find.text('Inbox')), findsNothing);
+      expect(find.descendant(of: find.byType(BottomSheet), matching: find.text('Sent')), findsOneWidget);
+      expect(find.descendant(of: find.byType(BottomSheet), matching: find.text('Trash')), findsOneWidget);
+    });
+
+    testWidgets('dismissing the folder picker without choosing a folder leaves the selection untouched',
+        (tester) async {
+      final repository = MockMailRepository();
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.folder_outlined));
+      await tester.pumpAndSettle();
+
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      expect(find.text('1 selected'), findsOneWidget);
+      verifyNever(() => repository.moveMessages(any(), any(), any(), any()));
+    });
+
+    testWidgets('a bulk-move call that throws reports the failure instead of crashing', (tester) async {
+      final repository = MockMailRepository();
+      when(() => repository.moveMessages(any(), any(), any(), any())).thenThrow(Exception('offline'));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == inbox.id ? [message] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.folder_outlined));
+      await tester.pumpAndSettle();
+      // "Trash" also appears as a background folder tab — scope to the
+      // picker's own bottom sheet.
+      await tester.tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Trash')));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.textContaining("Couldn't move"), findsOneWidget);
+    });
+
+    testWidgets('bulk-deleting while already viewing Trash reports "deleted", not "moved to Trash" (permanent removal)',
+        (tester) async {
+      final repository = MockMailRepository();
+      final trashMessage = message.copyWith(folderId: trash.id!);
+      when(() => repository.deleteMessages(any(), any(), any()))
+          .thenAnswer((_) async => BulkResult(succeeded: [trashMessage], failed: const {}));
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          foldersProvider.overrideWith((ref, id) async => [inbox, sent, trash]),
+          messagesProvider.overrideWith((ref, folder) async => folder.id == trash.id ? [trashMessage] : const []),
+          accountsProvider.overrideWith(() => _FakeAccountsNotifier([account])),
+          mailRepositoryProvider.overrideWith((ref) async => repository),
+          swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+        ],
+        child: const MaterialApp(home: FolderViewScreen(accountId: accountId)),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Trash'));
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('Hello'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_outline));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('deleted'), findsOneWidget);
+      expect(find.textContaining('moved to Trash'), findsNothing);
+    });
   });
 }

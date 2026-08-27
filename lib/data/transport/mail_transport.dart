@@ -86,4 +86,21 @@ abstract class MailTransport {
     MailMessage message,
     MailFolder destination,
   );
+
+  /// Moves every message in [messages] from [source] to [destination] on
+  /// the server, reusing a single connection for the whole batch instead of
+  /// reconnecting per message (see the design spec's "Execution model").
+  /// Returns each message's new UID in [destination] if the server reports
+  /// one, keyed by the message's local database id (`message.id!`) — not by
+  /// `MailMessage` itself, since pre- and post-move copies of the same
+  /// message compare unequal under its value-equality (`Equatable`). A
+  /// message missing from the returned map means that one message's move
+  /// failed without aborting the rest of the batch.
+  Future<Map<int, int?>> moveMessages(
+    MailAccount account,
+    String password,
+    MailFolder source,
+    List<MailMessage> messages,
+    MailFolder destination,
+  );
 }

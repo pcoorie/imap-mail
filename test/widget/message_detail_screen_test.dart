@@ -26,6 +26,7 @@ import 'package:imap_mail/providers/database_providers.dart';
 import 'package:imap_mail/providers/filesystem_providers.dart';
 import 'package:imap_mail/providers/message_providers.dart';
 import 'package:imap_mail/providers/repository_providers.dart';
+import 'package:imap_mail/screens/compose_screen.dart';
 import 'package:imap_mail/screens/message_detail_screen.dart';
 import 'package:imap_mail/services/attachment_opener.dart';
 
@@ -147,6 +148,16 @@ class _FakeMailTransport implements MailTransport {
     MailFolder destination,
   ) async =>
       null;
+
+  @override
+  Future<Map<int, int?>> moveMessages(
+    MailAccount account,
+    String password,
+    MailFolder source,
+    List<MailMessage> messages,
+    MailFolder destination,
+  ) async =>
+      const {};
 }
 
 class _FakeAttachmentOpener implements AttachmentOpener {
@@ -746,5 +757,57 @@ void main() {
     expect(find.byType(MessageDetailScreen), findsNothing);
     final remaining = await MessageDao(seed.db).getById(seed.message.id!);
     expect(remaining, isNull);
+  });
+
+  testWidgets(
+      'Forward waits for the body fetch instead of forwarding an empty message '
+      '(regression: tapping Forward before _load() finished passed the un-hydrated, '
+      'body-less list-row message straight to ComposeScreen)', (tester) async {
+    final seed = await seedDatabase(downloaded: false);
+    addTearDown(() => seed.db.close());
+    final repository = MockMailRepository();
+    final bodyCompleter = Completer<MailMessage>();
+    when(() => repository.fetchBodyIfNeeded(any(), any(), any()))
+        .thenAnswer((_) => bodyCompleter.future);
+    when(() => repository.getAttachments(any())).thenAnswer((_) async => <MailAttachment>[]);
+    when(() => repository.markRead(any(), any(), any(), any(),
+        revertLocalOnFailure: any(named: 'revertLocalOnFailure'))).thenAnswer((_) async {});
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([seed.account])),
+        mailRepositoryProvider.overrideWith((ref) async => repository),
+      ],
+      child: MaterialApp(
+        home: Navigator(
+          onGenerateRoute: (settings) => MaterialPageRoute(
+            builder: (_) => MessageDetailScreen(folder: seed.folder, message: seed.message),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    // Body fetch is still pending — the screen is showing its loading spinner.
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.forward));
+    await tester.pump();
+    await tester.pump();
+
+    // Must not have navigated yet: doing so now would carry the body-less
+    // seed.message straight into ComposeScreen, forwarding an empty message.
+    expect(find.byType(ComposeScreen), findsNothing);
+
+    bodyCompleter.complete(seed.message.copyWith(
+      bodyText: 'The real body content, fetched just in time.',
+      isDownloaded: true,
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ComposeScreen), findsOneWidget);
+    final bodyField = tester.widget<TextField>(find.byKey(const Key('bodyField')));
+    expect(bodyField.controller!.text, contains('The real body content, fetched just in time.'));
   });
 }

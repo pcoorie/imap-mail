@@ -14,6 +14,8 @@ Most consumer mail apps either force you through a provider's OAuth flow or funn
 - **Full folder access** — Inbox, Sent, and Trash front and center, with every other folder your server reports (Archive, custom labels, etc.) one tap away.
 - **Compose, reply, and forward**, with file attachments, sent straight over SMTP.
 - **Swipeable triage actions** — swipe a message to archive, delete, flag, or mark read/unread. Every slot is customizable in Settings, and every action writes back to the server, not just the local cache.
+- **Multi-select bulk actions** — long-press a message to start selecting, tap more to add to the selection, then move the whole batch to Trash or any other folder in one go.
+- **Global search** — one search box finds a message by subject, sender, or snippet across every folder of every account at once.
 
 ### Attachments that behave
 - Tap an attachment to download it and open it straight in your device's native preview — the same viewer Apple Mail itself uses for PDFs, Word docs, images, and more.
@@ -29,6 +31,7 @@ Most consumer mail apps either force you through a provider's OAuth flow or funn
 
 ### Reliable by default
 - **Offline-first caching** — accounts, folders, and messages are cached locally, so the app opens fast and stays readable without a connection. Sync happens in the foreground: on open, on pull-to-refresh, and after any action.
+- **Moves that actually land on the server** — delete, archive, and folder moves are confirmed complete on the server itself, not just flagged and left behind, even for IMAP servers that don't support the `MOVE` extension. What you do in Cobalt Mail is what every other client sees too.
 - **Graceful handling of mail deleted elsewhere** — opening a message that's since been removed from another device shows a clear explanation instead of a crash, and cleans up the stale local copy automatically.
 - **Credentials stay on-device**, stored in the platform's secure keychain — never written to the local cache, never sent anywhere but your mail server.
 
@@ -38,7 +41,6 @@ This is a v1 built around a clear set of tradeoffs, not a feature-complete clien
 
 - No push notifications or background sync — mail updates when the app is open, by design (no server-side infrastructure, no battery drain from a background service).
 - No OAuth providers (Gmail API, Microsoft Graph) — IMAP/SMTP only, by choice.
-- No in-app search yet — planned as a fast-follow.
 - No message threading — a flat, chronological list.
 
 ## Tech

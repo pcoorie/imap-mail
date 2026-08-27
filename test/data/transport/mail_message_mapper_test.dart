@@ -105,4 +105,43 @@ void main() {
 
     expect(message.isFlagged, isTrue);
   });
+
+  group('mapMimeMessagesToRecords', () {
+    MimeMessage buildMime(String subject, {bool deleted = false}) {
+      final builder = MessageBuilder()
+        ..from = [MailAddress('Alice', 'alice@example.com')]
+        ..to = [MailAddress('Bob', 'bob@example.com')]
+        ..subject = subject
+        ..text = 'Body of $subject';
+      final mime = builder.buildMimeMessage();
+      mime.isDeleted = deleted;
+      return mime;
+    }
+
+    test('drops messages already flagged \\Deleted on the server', () {
+      // A folder's newest message, after being moved elsewhere via the
+      // COPY+flag-\Deleted fallback (no immediate EXPUNGE — see
+      // enough_mail_transport.dart's moveMessage), remains fetchable from
+      // its original folder under its original UID. An incremental sync
+      // that doesn't exclude \Deleted messages re-discovers it as "new"
+      // every time and resurrects it right back into the folder it was
+      // just removed from — this is the regression test for that bug.
+      final kept = buildMime('Still here');
+      final removed = buildMime('Already moved away', deleted: true);
+
+      final records = mapMimeMessagesToRecords([kept, removed], folderId: 7);
+
+      expect(records, hasLength(1));
+      expect(records.single.subject, 'Still here');
+    });
+
+    test('keeps every message when none are flagged \\Deleted', () {
+      final a = buildMime('First');
+      final b = buildMime('Second');
+
+      final records = mapMimeMessagesToRecords([a, b], folderId: 7);
+
+      expect(records.map((m) => m.subject), ['First', 'Second']);
+    });
+  });
 }

@@ -102,9 +102,7 @@ class EnoughMailTransport implements MailTransport {
         sequence,
         fetchPreference: enough.FetchPreference.envelope,
       );
-      return mimeMessages
-          .map((mime) => mapMimeMessageToRecord(mime, folderId: folder.id!))
-          .toList();
+      return mapMimeMessagesToRecords(mimeMessages, folderId: folder.id!);
     } finally {
       await client.disconnect();
     }
@@ -279,6 +277,41 @@ class EnoughMailTransport implements MailTransport {
       final sequence = enough.MessageSequence.fromId(message.uid, isUid: true);
       final result = await client.moveMessages(sequence, targetMailbox);
       return result.targetSequence?.toList().firstOrNull;
+    } finally {
+      await client.disconnect();
+    }
+  }
+
+  @override
+  Future<Map<int, int?>> moveMessages(
+    MailAccount account,
+    String password,
+    MailFolder source,
+    List<MailMessage> messages,
+    MailFolder destination,
+  ) async {
+    final client = enough.MailClient(_toEnoughAccount(account, password));
+    final results = <int, int?>{};
+    try {
+      await client.connect();
+      final mailboxes = await client.listMailboxes();
+      final targetMailbox = mailboxes.firstWhereOrNull((box) => box.path == destination.path);
+      if (targetMailbox == null) {
+        throw StateError('Destination folder ${destination.path} not found on server');
+      }
+      await client.selectMailboxByPath(source.path);
+      for (final message in messages) {
+        try {
+          final sequence = enough.MessageSequence.fromId(message.uid, isUid: true);
+          final result = await client.moveMessages(sequence, targetMailbox);
+          results[message.id!] = result.targetSequence?.toList().firstOrNull;
+        } catch (_) {
+          // One message's move failing must not abort the rest of the
+          // batch — leaving it out of `results` is how the repository layer
+          // tells it apart from a successful move with no reported uid.
+        }
+      }
+      return results;
     } finally {
       await client.disconnect();
     }

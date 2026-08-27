@@ -18,6 +18,7 @@ import 'package:imap_mail/providers/repository_providers.dart';
 import 'package:imap_mail/providers/swipe_action_providers.dart';
 import 'package:imap_mail/providers/sync_status_providers.dart';
 import 'package:imap_mail/providers/unified_inbox_providers.dart';
+import 'package:imap_mail/screens/search_screen.dart';
 import 'package:imap_mail/screens/unified_inbox_screen.dart';
 import 'package:imap_mail/widgets/account_color.dart';
 
@@ -349,5 +350,22 @@ void main() {
     await tester.pump();
 
     expect(resolved, isTrue);
+  });
+
+  testWidgets('the app bar search icon opens SearchScreen', (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        accountsProvider.overrideWith(() => _FakeAccountsNotifier([work])),
+        unifiedInboxProvider.overrideWith((ref) async => []),
+        swipeActionConfigProvider.overrideWith(() => _FakeSwipeActionConfigNotifier(SwipeActionConfig.defaults)),
+      ],
+      child: const MaterialApp(home: UnifiedInboxScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(SearchScreen), findsOneWidget);
   });
 }

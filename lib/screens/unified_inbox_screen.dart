@@ -18,6 +18,7 @@ import '../widgets/message_swipe_controller.dart';
 import '../widgets/sync_error_banner.dart';
 import 'compose_screen.dart';
 import 'message_detail_screen.dart';
+import 'search_screen.dart';
 
 /// Invalidates every underlying provider `unifiedInboxProvider` derives its
 /// data from — each account's `foldersProvider(accountId)` and each
@@ -80,7 +81,17 @@ class UnifiedInboxScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      appBar: AppBar(title: const Text('All Inboxes')),
+      appBar: AppBar(
+        title: const Text('All Inboxes'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SearchScreen()),
+            ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => _compose(context, ref),
         child: const Icon(Icons.edit),
