@@ -31,6 +31,7 @@ Most consumer mail apps either force you through a provider's OAuth flow or funn
 
 ### Reliable by default
 - **Offline-first caching** — accounts, folders, and messages are cached locally, so the app opens fast and stays readable without a connection. Sync happens in the foreground: on open, on pull-to-refresh, and after any action.
+- **Moves that actually land on the server** — delete, archive, and folder moves are confirmed complete on the server itself, not just flagged and left behind, even for IMAP servers that don't support the `MOVE` extension. What you do in Cobalt Mail is what every other client sees too.
 - **Graceful handling of mail deleted elsewhere** — opening a message that's since been removed from another device shows a clear explanation instead of a crash, and cleans up the stale local copy automatically.
 - **Credentials stay on-device**, stored in the platform's secure keychain — never written to the local cache, never sent anywhere but your mail server.
 
